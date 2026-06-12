@@ -118,7 +118,7 @@ describe('ERC-4626 vault deposit — investor tx', () => {
 
   it('selector on wrong (non-vault) address → null from decoder → falls through to UNKNOWN', async () => {
     const tx = makeRawTx({
-      to: '0x' + 'ff'.repeat(20),
+      to: `0x${'ff'.repeat(20)}` as `0x${string}`,
       input: '0x6e553f65' + '00'.repeat(64), // deposit selector on unknown address
     });
     const out = await classifyWithDeps({ fetched: makeFetched([tx]) });
