@@ -26,7 +26,6 @@ const EnvSchema = z
     CELO_RPC_URL: Url,
     CELOSCAN_API_URL: Url,
     CELOSCAN_API_KEY: z.string().default(''),
-    COINGECKO_API_KEY: z.string().default(''),
     ANTHROPIC_API_KEY: z.string().default(''),
     AGENT_LLM_MODEL: z.string().default('claude-sonnet-4-6'),
     // Agent wallet is OPTIONAL — only required for write operations
@@ -78,7 +77,6 @@ export interface AppConfig {
   celoRpcUrl: string;
   celoscanApiUrl: string;
   celoscanApiKey: string;
-  coingeckoApiKey: string;
   anthropicApiKey: string;
   anthropicModel?: string;
   /**
@@ -126,7 +124,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     celoRpcUrl: e.CELO_RPC_URL,
     celoscanApiUrl: e.CELOSCAN_API_URL,
     celoscanApiKey: e.CELOSCAN_API_KEY,
-    coingeckoApiKey: e.COINGECKO_API_KEY,
     anthropicApiKey: e.ANTHROPIC_API_KEY,
     anthropicModel: e.AGENT_LLM_MODEL,
     ...(agentWallet && { agentWallet }),

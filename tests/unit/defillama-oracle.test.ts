@@ -1,46 +1,26 @@
 /**
- * Unit tests for the CoinGecko price oracle.
+ * Unit tests for the DefiLlama price oracle.
  *
  * Owner: Credio (shared/price-oracle).
  *
  * Scope:
- *   - Pure helpers (formatDate, nearestPoint) are exercised directly.
+ *   - Pure helper (`nearestPoint`) is exercised directly.
  *   - The HTTP path is exercised via a stubbed fetcher, so the tests do
- *     not hit the real API. CoinGecko rate-limits aggressively; never
- *     rely on the network in CI.
+ *     not hit the real API. DefiLlama has no documented rate limit, but
+ *     we still stub the network to keep CI deterministic.
  */
 
 import { describe, expect, it } from 'vitest';
 import {
-  CoinGeckoOracle,
-  formatDate,
+  DefiLlamaOracle,
   nearestPoint,
   type PricePoint,
-} from '../../src/shared/price-oracle/coingecko.js';
+} from '../../src/shared/price-oracle/defillama.js';
 import type { HttpResponse } from '../../src/shared/http.js';
 import type { Timestamp } from '../../src/shared/types.js';
 
 const TS_JAN_1_2024 = 1_704_067_200 as Timestamp;
-const TS_JAN_1_2024_5PM = 1_704_067_200 + 17 * 3600 as Timestamp;
 const TS_JAN_2_2024 = TS_JAN_1_2024 + 86_400;
-
-// ─── formatDate ────────────────────────────────────────────────────────────
-
-describe('formatDate', () => {
-  it('formats Unix seconds as DD-MM-YYYY in UTC', () => {
-    expect(formatDate(TS_JAN_1_2024)).toBe('01-01-2024');
-    expect(formatDate(TS_JAN_1_2024 + 86_400 * 30)).toBe('31-01-2024');
-    // Leap year: 2024-02-29.
-    expect(formatDate(TS_JAN_1_2024 + 86_400 * 59)).toBe('29-02-2024');
-  });
-
-  it('rolls over to the next day past UTC midnight', () => {
-    // 2024-01-01 23:59:59 UTC → 01-01-2024
-    expect(formatDate(TS_JAN_1_2024 + 86_400 - 1)).toBe('01-01-2024');
-    // 2024-01-02 00:00:00 UTC → 02-01-2024
-    expect(formatDate(TS_JAN_2_2024)).toBe('02-01-2024');
-  });
-});
 
 // ─── nearestPoint ──────────────────────────────────────────────────────────
 
@@ -76,105 +56,120 @@ function stubOracle(responses: Record<string, unknown>) {
     }
     throw new Error(`No stub for URL: ${url}`);
   };
-  return new CoinGeckoOracle({ fetcher: fetcher as never });
+  return new DefiLlamaOracle({ fetcher: fetcher as never });
 }
 
-describe('CoinGeckoOracle', () => {
-  it('resolves a historical price from the /history endpoint', async () => {
+describe('DefiLlamaOracle', () => {
+  it('resolves a historical price from the /prices/historical endpoint', async () => {
     const oracle = stubOracle({
-      '/coins/celo/history': {
-        market_data: { current_price: { usd: 0.61234 } },
+      '/prices/historical/1704067200/coingecko:celo': {
+        coins: {
+          'coingecko:celo': {
+            price: 0.61234,
+            symbol: 'CELO',
+            timestamp: TS_JAN_1_2024,
+            confidence: 0.99,
+          },
+        },
       },
     });
 
     const point = await oracle.getHistoricalPrice('CELO', TS_JAN_1_2024);
     expect(point).not.toBeNull();
     expect(point!.priceUsd).toBeCloseTo(0.61234, 5);
-    // Jan 1 00:00 UTC requested → snapshot at Jan 1 00:00 UTC → 0 hours stale.
     expect(point!.staleByHours).toBe(0);
   });
 
-  it('returns null for unknown symbols (no CoinGecko ID)', async () => {
+  it('returns null for unknown symbols (no DefiLlama ID)', async () => {
     const oracle = stubOracle({});
     const point = await oracle.getHistoricalPrice('FAKECOIN', TS_JAN_1_2024);
     expect(point).toBeNull();
   });
 
-  it('falls back to market_chart when /history has no price data', async () => {
+  it('returns null when DefiLlama has no data for the requested coin', async () => {
     const oracle = stubOracle({
-      '/coins/celo/history': {}, // no market_data field
-      '/market_chart/range': {
-        prices: [
-          [(TS_JAN_1_2024 - 3600) * 1000, 0.5],
-          [TS_JAN_1_2024 * 1000, 0.55],
-          [(TS_JAN_1_2024 + 3600) * 1000, 0.6],
-        ],
-      },
+      '/prices/historical/': { coins: {} }, // empty coins object
     });
-
-    const point = await oracle.getHistoricalPrice('CELO', TS_JAN_1_2024_5PM);
-    expect(point).not.toBeNull();
-    // The nearest of the three points to 17:00 UTC is the 18:00 one (delta 1h)
-    // since the 16:00 one is also 1h away; the algorithm returns the first
-    // encountered. Either 0.5 or 0.6 is acceptable here.
-    expect([0.5, 0.55, 0.6]).toContain(point!.priceUsd);
+    const point = await oracle.getHistoricalPrice('CELO', TS_JAN_1_2024);
+    expect(point).toBeNull();
   });
 
-  it('batchHistoricalPrices issues one market_chart call per symbol', async () => {
-    let callCount = 0;
+  it('computes staleByHours from the timestamp gap', async () => {
+    // DefiLlama returns a point 30 min after the requested time.
+    const oracle = stubOracle({
+      '/prices/historical/': {
+        coins: {
+          'coingecko:celo': {
+            price: 0.6,
+            symbol: 'CELO',
+            timestamp: TS_JAN_1_2024 + 1800, // 30 min later
+            confidence: 0.99,
+          },
+        },
+      },
+    });
+    const point = await oracle.getHistoricalPrice('CELO', TS_JAN_1_2024);
+    expect(point!.staleByHours).toBeCloseTo(0.5, 5);
+  });
+
+  it('batchHistoricalPrices issues one call per (symbol, timestamp) pair', async () => {
     const seenUrls: string[] = [];
     const fetcher = async <T>(url: string): Promise<HttpResponse<T>> => {
       seenUrls.push(url);
-      callCount += 1;
-      if (url.includes('/coins/celo/market_chart/range')) {
+      // Return a stub for any /prices/historical URL.
+      const match = url.match(/\/prices\/historical\/(\d+)\/coingecko:([\w-]+)/);
+      if (match) {
         return {
           status: 200,
           headers: new Headers(),
           data: {
-            prices: [
-              [TS_JAN_1_2024 * 1000, 0.5],
-              [TS_JAN_2_2024 * 1000, 0.6],
-            ],
-          } as T,
-        };
-      }
-      if (url.includes('/coins/usd-coin/market_chart/range')) {
-        return {
-          status: 200,
-          headers: new Headers(),
-          data: {
-            prices: [
-              [TS_JAN_1_2024 * 1000, 1.0],
-              [TS_JAN_2_2024 * 1000, 1.0],
-            ],
+            coins: {
+              [`coingecko:${match[2]}`]: {
+                price: 1.0,
+                symbol: match[2]!.toUpperCase(),
+                timestamp: Number(match[1]),
+                confidence: 0.99,
+              },
+            },
           } as T,
         };
       }
       throw new Error(`Unexpected URL in test: ${url}`);
     };
-    const oracle = new CoinGeckoOracle({ fetcher: fetcher as never });
+    const oracle = new DefiLlamaOracle({ fetcher: fetcher as never });
 
     const out = await oracle.batchHistoricalPrices([
       { symbol: 'CELO', timestamp: TS_JAN_1_2024 },
       { symbol: 'CELO', timestamp: TS_JAN_2_2024 },
       { symbol: 'USDC', timestamp: TS_JAN_1_2024 },
       { symbol: 'USDC', timestamp: TS_JAN_2_2024 },
-      { symbol: 'FAKECOIN', timestamp: TS_JAN_1_2024 }, // unknown → null
+      { symbol: 'FAKECOIN', timestamp: TS_JAN_1_2024 }, // unknown → null, no call
     ]);
 
-    // 2 market_chart calls (one per known symbol) + 0 for the unknown.
-    expect(callCount).toBe(2);
-    expect(seenUrls.every((u) => u.includes('/market_chart/range'))).toBe(true);
+    // 4 calls (one per known pair). FAKECOIN returns null with zero calls.
+    expect(seenUrls).toHaveLength(4);
+    expect(seenUrls.every((u) => u.includes('/prices/historical/'))).toBe(true);
+    expect(seenUrls.every((u) => u.includes('coingecko:'))).toBe(true);
 
-    expect(out.get(`CELO:${TS_JAN_1_2024}`)?.priceUsd).toBe(0.5);
-    expect(out.get(`CELO:${TS_JAN_2_2024}`)?.priceUsd).toBe(0.6);
+    expect(out.get(`CELO:${TS_JAN_1_2024}`)?.priceUsd).toBe(1.0);
+    expect(out.get(`CELO:${TS_JAN_2_2024}`)?.priceUsd).toBe(1.0);
     expect(out.get(`USDC:${TS_JAN_1_2024}`)?.priceUsd).toBe(1.0);
+    expect(out.get(`USDC:${TS_JAN_2_2024}`)?.priceUsd).toBe(1.0);
     expect(out.get(`FAKECOIN:${TS_JAN_1_2024}`)).toBeNull();
   });
 
   it('getSpotPrice returns a PricePoint with the current time', async () => {
     const oracle = stubOracle({
-      '/simple/price': { celo: { usd: 0.42 } },
+      '/prices/current/coingecko:celo': {
+        coins: {
+          'coingecko:celo': {
+            price: 0.42,
+            symbol: 'CELO',
+            timestamp: Math.floor(Date.now() / 1000),
+            confidence: 0.99,
+          },
+        },
+      },
     });
     const before = Math.floor(Date.now() / 1000);
     const point = await oracle.getSpotPrice('CELO');

@@ -27,7 +27,7 @@ import { exportCsvAsync } from '../sub-agents/csv-exporter/index.js';
 import { fetchTxs } from '../sub-agents/tx-fetcher/index.js';
 import { createAgentWallet } from '../infra/wallet.js';
 import { createLogEmitter } from '../infra/log-emitter.js';
-import { CoinGeckoOracle } from '../shared/price-oracle/coingecko.js';
+import { DefiLlamaOracle } from '../shared/price-oracle/defillama.js';
 import type { Timestamp } from '../shared/types.js';
 import type { AppConfig } from '../shared/config.js';
 import type { PipelineDeps } from './types.js';
@@ -84,12 +84,13 @@ export function makeProductionDeps(input: ProductionDepsInput): PipelineDeps {
   const agentWallet = createAgentWallet(config);
   const emitLog = createLogEmitter(agentWallet);
 
-  // Construct the CoinGecko oracle once. The PNL / CSV exporter consume
+  // Construct the DefiLlama oracle once. The PNL / CSV exporter consume
   // priceUsd from each classified tx's assetIn/assetOut. The classifier
   // emits priceUsd=0 (the price is not its job); the orchestrator must
   // enrich before PNL runs or every year summary collapses to $0 even
-  // when the classifier correctly identified income events.
-  const priceOracle = new CoinGeckoOracle({ apiKey: config.coingeckoApiKey ?? '' });
+  // when the classifier correctly identified income events. DefiLlama
+  // is fully public — no API key needed, generous rate limit.
+  const priceOracle = new DefiLlamaOracle();
 
   const classifierDeps: ClassifyDeps = {
     makeLookup: makeContractLookup,
@@ -162,7 +163,7 @@ export function makeProductionDeps(input: ProductionDepsInput): PipelineDeps {
  */
 async function enrichClassifiedPrices(
   classified: readonly ClassifiedTx[],
-  oracle: CoinGeckoOracle,
+  oracle: DefiLlamaOracle,
 ): Promise<void> {
   // Collect unique (symbol, timestamp) pairs first.
   const seen = new Set<string>();

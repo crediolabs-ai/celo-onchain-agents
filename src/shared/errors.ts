@@ -53,9 +53,9 @@ export class CeloscanError extends AgentError {
   }
 }
 
-export class CoinGeckoError extends AgentError {
+export class DefiLlamaError extends AgentError {
   constructor(message: string, cause?: unknown) {
-    super(message, 'COINGECKO_ERROR', cause);
+    super(message, 'DEFILLAMA_ERROR', cause);
   }
 }
 

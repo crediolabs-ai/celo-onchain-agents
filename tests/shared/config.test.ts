@@ -18,7 +18,6 @@ function envFrom(keypair: { pk: `0x${string}`; address: `0x${string}` }, overrid
     CELO_RPC_URL: RPC,
     CELOSCAN_API_URL: SCAN,
     CELOSCAN_API_KEY: '',
-    COINGECKO_API_KEY: '',
     ANTHROPIC_API_KEY: '',
     AGENT_WALLET_PRIVATE_KEY: keypair.pk,
     AGENT_WALLET_ADDRESS: keypair.address,

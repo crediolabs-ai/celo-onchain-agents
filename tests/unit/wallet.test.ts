@@ -35,7 +35,6 @@ function makeTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     celoRpcUrl: 'http://localhost:0', // never actually called — tests inject a stub transport
     celoscanApiUrl: 'https://api-alfajores.celoscan.io',
     celoscanApiKey: '',
-    coingeckoApiKey: '',
     anthropicApiKey: '',
     agentWallet: {
       address: TEST_ACCOUNT.address,
