@@ -359,6 +359,69 @@ describe('llmClassifyTx', () => {
   });
 });
 
+// ─── path-ordering guard (Phase A fix) ───────────────────────────────────
+
+const GOODDOLLAR_RESERVE = '0x94A3240f484A04F5e3d524f528d02694c109463b'.toLowerCase() as Address;
+const UBESWAP_ROUTER = '0xE3D8bd6Aed4F159bc8000a9cD47CffDb95F96121'.toLowerCase() as Address;
+
+describe('path-ordering guard', () => {
+  it('GoodDollar claim (selector in BOTH maps) → protocol-decoder path', async () => {
+    // 0x4e71d92d is in both selector-registry (as CLAIM → INTERACTION) and
+    // SELECTOR_MAP (GOODDOLLAR:CLAIM_YIELD). The guard at step 2.5 must
+    // skip classifyBySelector so the decoder fires at step 2.7.
+    const tx = makeRawTx({
+      input: '0x4e71d92d00000000000000000000000000000000000000000000000000000000',
+      to: GOODDOLLAR_RESERVE,
+    });
+    const out = await classifyWithDeps({ fetched: makeFetched([tx]) });
+
+    expect(out.classified).toHaveLength(1);
+    expect(out.classified[0]!.classifierSource).toBe('rule-protocol');
+    expect(out.protocolDecoderHits).toBe(1);
+    expect(out.classified[0]!.notes).toContain('GOODDOLLAR');
+    expect(out.classified[0]!.notes).toContain('CLAIM_YIELD');
+    // Regression guard: selector-registry path must NOT have fired (no 'claim'
+    // key in interactionBreakdown since classifyBySelector was skipped).
+    expect(out.interactionBreakdown).not.toHaveProperty('claim');
+  });
+
+  it('Ubeswap swap (selector in SELECTOR_MAP only) → protocol-decoder path', async () => {
+    // 0x38ed1739 is in SELECTOR_MAP (UBESWAP:SWAP) but NOT in selector-registry.
+    // No blocking rule for Ubeswap router, so the guard at step 2.5 skips
+    // classifyBySelector and the decoder fires at step 2.7.
+    const tx = makeRawTx({
+      input: '0x38ed1739' + '0'.repeat(128),
+      to: UBESWAP_ROUTER,
+    });
+    const out = await classifyWithDeps({ fetched: makeFetched([tx]) });
+
+    expect(out.classified).toHaveLength(1);
+    expect(out.classified[0]!.classifierSource).toBe('rule-protocol');
+    expect(out.classified[0]!.notes).toContain('UBESWAP');
+    expect(out.classified[0]!.notes).toContain('SWAP');
+  });
+
+  it('ERC-20 transfer (selector in selector-registry only) → selector-registry path', async () => {
+    // 0xa9059cbb is in selector-registry (transfer) but NOT in SELECTOR_MAP.
+    // The guard condition is false; classifyBySelector fires normally.
+    const tx = makeRawTx({
+      input: '0xa9059cbb000000000000000000000000' + 'b'.repeat(40) + '000000000000000000000000000000000000000000000000000000000000000a',
+      to: ADDR_B,
+    });
+    const out = await classifyWithDeps({ fetched: makeFetched([tx]) });
+
+    expect(out.classified).toHaveLength(1);
+    expect(out.classified[0]!.classifierSource).toBe('rule');
+    // interactionBreakdown must have the transfer signature as key
+    // (selector-registry path populates it with the function signature).
+    const transferKeys = Object.keys(out.interactionBreakdown).filter((k) =>
+      k.toLowerCase().includes('transfer'),
+    );
+    expect(transferKeys).toHaveLength(1);
+    expect(out.protocolDecoderHits).toBe(0);
+  });
+});
+
 // ─── index.ts (orchestration) ──────────────────────────────────────────────
 
 describe('classifyWithDeps', () => {
