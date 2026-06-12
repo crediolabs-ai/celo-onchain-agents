@@ -179,16 +179,19 @@ describe('decodeProtocolAction', () => {
     expect(decodeProtocolAction(tx, [])).toBeNull();
   });
 
-  it('selector match to wrong address returns confidence 0.7 even with no transfers', () => {
+  it('selector match to wrong address returns null (false-positive guard)', () => {
     const tx = makeRawTx({
       to: ('0x' + 'ff'.repeat(20)) as Address,
       input: '0x8d46b1e8' + '00'.repeat(64), // Mento selector, wrong address
     });
-    // Selector matched but address not a known protocol → 0.7 (cross-check missed)
+    // Generic selectors like 0x8d46b1e8 (Mento swap) appear in many
+    // unrelated contracts (claim() on a USDT-related contract is a
+    // common false positive). Address match is now MANDATORY — a
+    // selector hit on an unknown `to` must not be classified as
+    // protocol-specific. Returns null so the tx falls through to
+    // other classifier paths.
     const result = decodeProtocolAction(tx, []);
-    expect(result).not.toBeNull();
-    expect(result?.confidence).toBe(0.7);
-    expect(result?.protocol).toBe(ProtocolName.MENTO);
+    expect(result).toBeNull();
   });
 
   // ── Transfer-shape heuristic ────────────────────────────────────────────
@@ -248,12 +251,14 @@ describe('decodeProtocolAction', () => {
     expect(decodeProtocolAction(tx, [])?.confidence).toBe(0.9);
   });
 
-  it('selector match to wrong address returns confidence 0.7 (addr cross-check missed)', () => {
+  it('selector match to wrong address returns null (false-positive guard)', () => {
     const tx = makeRawTx({
       to: ('0x' + 'ff'.repeat(20)) as Address, // wrong address
       input: '0x8d46b1e8' + '00'.repeat(64), // swapExactIn (Mento selector)
     });
-    expect(decodeProtocolAction(tx, [])?.confidence).toBe(0.7);
+    // Generic selector on a non-Mento contract must NOT be classified as
+    // Mento. Returns null so the tx falls through to a different path.
+    expect(decodeProtocolAction(tx, [])).toBeNull();
   });
 
   it('inferred from multi-transfer shape returns confidence 0.5', () => {

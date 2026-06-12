@@ -42,6 +42,15 @@ const MOOLA_CTOKEN_CUSD = '0x43d067F76154E7620555673F8c6D8C8E51F3f7D4'.toLowerCa
 const MOOLA_CTOKEN_CEUR = '0x6F673c23C7023f5E8C1f1aD1dA5C2F88e2C1b5F8'.toLowerCase(); // estimated
 // GoodDollar Reserve (mainnet) — from contracts.ts NAMED_CONTRACTS.
 const GOODDOLLAR_RESERVE = '0x94A3240f484A04F5e3d524f528d02694c109463b'.toLowerCase();
+// GoodDollar UBI is distributed through per-pool "Claimer" contracts (not
+// the reserve itself). User txs call `claim()` on these. The list is
+// restricted to addresses that emit a G$ transfer on Celo mainnet —
+// `claim()` is a generic 4-byte selector (`0x4e71d92d`) shared with
+// USDT-style contracts, so the address check is mandatory. Sourced from
+// Celo mainnet tokentx inspection 2026-06-12.
+const GOODDOLLAR_CLAIMERS = new Set<string>([
+  '0x43d72ff17701b2da814620735c39c620ce0ea4a1',
+].map((a) => a.toLowerCase()));
 
 // ─── Selector index for fast lookup ────────────────────────────────────────
 
@@ -185,13 +194,17 @@ export function decodeProtocolAction(
   if (selector) {
     const hit = SELECTOR_MAP.get(selector);
     if (hit) {
-      // Cross-check: protocol address should match known router/broker.
-      const addrMatch = isKnownProtocolAddress(toLower, hit.protocol);
-      const confidence = addrMatch ? 0.9 : 0.7;
+      // Address check is MANDATORY for protocol attribution. Selectors like
+      // 0x4e71d92d (claim()) are generic — many unrelated contracts
+      // (e.g. USDT-style claims) expose the same 4-byte selector. Without
+      // this gate, those false positives poison the classifier and
+      // downstream CSV reports (which then price a USDT transfer as if
+      // it were a GoodDollar G$ claim → $0 NGN totals).
+      if (!isKnownProtocolAddress(toLower, hit.protocol)) return null;
       return {
         protocol: hit.protocol,
         action: hit.action,
-        confidence,
+        confidence: 0.9,
         functionName: hit.functionName,
       };
     }
@@ -242,7 +255,7 @@ function isKnownProtocolAddress(addr: string, protocol: ProtocolName): boolean {
     case ProtocolName.MOOLA:
       return isMoolaCToken(addr);
     case ProtocolName.GOODDOLLAR:
-      return addr === GOODDOLLAR_RESERVE;
+      return addr === GOODDOLLAR_RESERVE || GOODDOLLAR_CLAIMERS.has(addr);
   }
 }
 
@@ -267,8 +280,10 @@ function inferActionFromSelectorCategory(
     }
   }
 
-  // GoodDollar reserve interactions.
-  if (addr === GOODDOLLAR_RESERVE) {
+  // GoodDollar reserve + claimer interactions. The user's `claim()` call
+  // lands on a per-pool Claimer contract; the Reserve is the underlying
+  // backing pool. Both are valid protocol entry points.
+  if (addr === GOODDOLLAR_RESERVE || GOODDOLLAR_CLAIMERS.has(addr)) {
     if (category === 'CLAIM') {
       return { protocol: ProtocolName.GOODDOLLAR, action: ProtocolActionType.CLAIM_YIELD, functionName: 'claim' };
     }

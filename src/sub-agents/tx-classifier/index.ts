@@ -39,6 +39,7 @@ import {
   type ClassifiedTx,
   type ClassifyOutput,
   type FetchedTxData,
+  type TokenTransfer,
   type Jurisdiction,
   type RawTx,
   type TxHash,
@@ -319,6 +320,15 @@ export async function classifyWithDeps(
     (c) => ClassifiedTxSchema.parse(c) as unknown as ClassifiedTx,
   );
 
+  // Fill in assetIn/assetOut from the tx's token transfers for any
+  // classified tx that didn't set them. The LLM path sets them from its
+  // own response, but the rule path and protocol-decoder path (Agent 06
+  // Phase A) historically emitted txs with no asset legs — leaving
+  // downstream FIFO / LIFO / NL-query / CSV exporter reading
+  // asset=UNKNOWN and amount=0, which collapsed every year summary to
+  // $0.00 even when the classifier correctly identified income events.
+  enrichClassifiedWithAssetLegs(validated, transfersByHash, fetched.address);
+
   return {
     classified: validated,
     flaggedForReview,
@@ -327,6 +337,75 @@ export async function classifyWithDeps(
     llmFallbacks,
     interactionBreakdown,
   };
+}
+
+/**
+ * For any classified tx missing assetIn/assetOut, derive them from the
+ * matching token transfers on that hash. Mutates the array in place.
+ *
+ * Direction convention matches the rest of the pipeline:
+ *   - `assetIn`  = token received (to == address). Used by YIELD, TRANSFER_IN,
+ *                  and the buy-side of SWAP. Symbol + amount populated here;
+ *                  `priceUsd` is 0 and filled in by the PNL price-enrichment
+ *                  stage downstream.
+ *   - `assetOut` = token sent (from == address). Used by TRANSFER_OUT and
+ *                  the sell-side of SWAP.
+ */
+function enrichClassifiedWithAssetLegs(
+  classified: readonly ClassifiedTx[],
+  transfersByHash: ReadonlyMap<string, readonly TokenTransfer[]>,
+  address: string,
+): void {
+  const addrLower = address.toLowerCase();
+  for (const cls of classified) {
+    const txTransfers = transfersByHash.get(cls.hash);
+    if (!txTransfers || txTransfers.length === 0) continue;
+
+    if (!cls.assetIn) {
+      // Pick the LARGEST incoming transfer by base-unit value. GoodDollar
+      // claim() txs, for example, fan out into multiple Transfer events
+      // (intermediate path tokens + the actual G$ claim); the first one
+      // alphabetically/by-hash is usually a small path token, not the
+      // yield itself. Largest-by-value reliably picks the G$ over USDT-
+      // and-cUSD-paths in the same tx.
+      let incoming: TokenTransfer | undefined;
+      for (const t of txTransfers) {
+        if (t.to.toLowerCase() !== addrLower) continue;
+        if (!incoming) { incoming = t; continue; }
+        try {
+          if (BigInt(t.value) > BigInt(incoming.value)) incoming = t;
+        } catch { /* keep current on parse error */ }
+      }
+      if (incoming) {
+        cls.assetIn = {
+          symbol: incoming.tokenSymbol,
+          // Preserve the raw base-unit (wei) integer string — downstream
+          // PNL stages call `BigInt(amount)` and will throw on any decimal
+          // point. Human-readable formatting happens at the CSV / display
+          // edge, not here.
+          amount: incoming.value,
+          priceUsd: 0,
+        };
+      }
+    }
+    if (!cls.assetOut) {
+      let outgoing: TokenTransfer | undefined;
+      for (const t of txTransfers) {
+        if (t.from.toLowerCase() !== addrLower) continue;
+        if (!outgoing) { outgoing = t; continue; }
+        try {
+          if (BigInt(t.value) > BigInt(outgoing.value)) outgoing = t;
+        } catch { /* keep current on parse error */ }
+      }
+      if (outgoing) {
+        cls.assetOut = {
+          symbol: outgoing.tokenSymbol,
+          amount: outgoing.value,
+          priceUsd: 0,
+        };
+      }
+    }
+  }
 }
 
 // Re-exports for callers that want to inspect the rule table or build their
