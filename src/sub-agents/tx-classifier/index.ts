@@ -36,6 +36,7 @@
 
 import {
   ClassifiedTxSchema,
+  type Address,
   type ClassifiedTx,
   type ClassifyOutput,
   type FetchedTxData,
@@ -61,7 +62,7 @@ import { findMatchingRule } from './rules.js';
 import { llmClassifyTx, type LlmFallbackDeps } from './llm-fallback.js';
 import type { PredicateContext } from './predicates.js';
 import { decodeProtocolAction, SELECTOR_MAP } from './protocol-decoder.js';
-import { protocolActionToTxType } from './protocol-actions.js';
+import { ProtocolName, protocolActionToTxType } from './protocol-actions.js';
 
 // ─── Public surface ────────────────────────────────────────────────────────
 
@@ -263,6 +264,12 @@ export async function classifyWithDeps(
       protocolDecoderHits += 1;
       const txType = protocolActionToTxType(protocolDecoded.protocol, protocolDecoded.action);
       const belowThreshold = protocolDecoded.confidence < minRuleConfidence;
+      // For ERC-4626 hits, the PNL engine keys lot queues per-vault — set
+      // `vaultAddress` so the per-vault lot identity is wired up end-to-end.
+      // decodeProtocolAction() already gates on isERC4626Vault() so tx.to is
+      // a registered vault when protocol === ERC4626.
+      const vaultAddress: Address | undefined =
+        protocolDecoded.protocol === ProtocolName.ERC4626 && tx.to !== null ? tx.to : undefined;
       const txOut: ClassifiedTx = {
         hash: tx.hash,
         type: txType,
@@ -270,6 +277,7 @@ export async function classifyWithDeps(
         classifierSource: belowThreshold ? 'flagged' : 'rule-protocol',
         confidence: protocolDecoded.confidence,
         notes: `${protocolDecoded.protocol}:${protocolDecoded.action} (${protocolDecoded.functionName})`,
+        ...(vaultAddress !== undefined && { vaultAddress }),
       };
       classified.push(txOut);
       if (belowThreshold) flaggedForReview.push(tx.hash);
