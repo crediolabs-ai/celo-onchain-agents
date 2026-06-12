@@ -80,7 +80,7 @@ function parseArgs(): ParsedArgs {
   };
 }
 
-function buildLlmDeps(): LlmFallbackDeps | undefined {
+function buildLlmDeps(config: { anthropicModel?: string }): LlmFallbackDeps | undefined {
   // The classifier's LLM fallback is optional — if no key is set, the
   // rule-based path covers everything the registry knows about.
   const key = process.env.ANTHROPIC_API_KEY;
@@ -88,17 +88,17 @@ function buildLlmDeps(): LlmFallbackDeps | undefined {
   const client = new Anthropic({ apiKey: key });
   return {
     client,
-    model: 'claude-opus-4-6',
+    model: config.anthropicModel ?? 'claude-sonnet-4-6',
   };
 }
 
-function buildAnswerDeps(): AnswerQueryDeps {
+function buildAnswerDeps(config: { anthropicModel?: string }): AnswerQueryDeps {
   // NL-query always needs an LLM. With no key, the orchestrator will still
   // run but answerQueryWithDeps will return a graceful fallback ("could not
   // reach the language model") — surfaced to the user.
   const key = process.env.ANTHROPIC_API_KEY;
   const client = new Anthropic({ apiKey: key ?? 'sk-no-key-set' });
-  return { llm: { client, model: 'claude-opus-4-6' } };
+  return { llm: { client, model: config.anthropicModel ?? 'claude-sonnet-4-6' } };
 }
 
 function formatResult(r: PipelineResult, args: ParsedArgs): string {
@@ -111,7 +111,12 @@ function formatResult(r: PipelineResult, args: ParsedArgs): string {
   lines.push(`- **Txns (raw):** ${r.fetched.rawTxns.length}`);
   lines.push(`- **Txns (token transfers):** ${r.fetched.tokenTransfers.length}`);
   lines.push(`- **Txns (internal):** ${r.fetched.internalTxns.length}`);
-  lines.push(`- **Classified:** ${r.classified.classified.length} (${r.classified.ruleHits} rules, ${r.classified.llmFallbacks} LLM)`);
+  lines.push(
+    `- **Classified:** ${r.classified.classified.length} ` +
+      `(${r.classified.ruleHits} rules, ` +
+      `${r.classified.protocolDecoderHits ?? 0} rule-protocol, ` +
+      `${r.classified.llmFallbacks} LLM)`,
+  );
   lines.push(`- **Flagged for review:** ${r.classified.flaggedForReview.length}`);
   if (r.fetched.fetchErrors.length > 0) {
     lines.push(`- **Fetch errors:** ${r.fetched.fetchErrors.length}`);
@@ -157,8 +162,8 @@ async function main(): Promise<void> {
 
   const deps = makeProductionDeps({
     config,
-    ...(buildLlmDeps() !== undefined && { classifierLlmDeps: buildLlmDeps()! }),
-    nlQueryDeps: buildAnswerDeps(),
+    ...(buildLlmDeps(config) !== undefined && { classifierLlmDeps: buildLlmDeps(config)! }),
+    nlQueryDeps: buildAnswerDeps(config),
     refresh: args.refresh,
   });
 

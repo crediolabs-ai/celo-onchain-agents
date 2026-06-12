@@ -13,7 +13,7 @@
  *     `tool_use` pattern with `tool_choice: { type: 'tool', name: ... }`.
  *   - `thinking.type: 'adaptive'` not in the union — left off with a
  *     TSDoc note to re-enable on SDK `^0.50+` bump.
- *   - Model: `claude-opus-4-6` per project default.
+ *   - Model: `claude-sonnet-4-6` per project default.
  *
  * The system prompt contains the schema in plain text so the LLM can
  * reason about which intent to pick, even though the API also enforces
@@ -23,6 +23,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { NetworkError, RateLimitError } from '../../shared/errors.js';
 import { QueryIntentSchema, type QueryIntent } from './intents.js';
+import { SKILLS } from '../../shared/skills.js';
 
 // ─── Public surface ────────────────────────────────────────────────────────
 
@@ -30,7 +31,7 @@ import { QueryIntentSchema, type QueryIntent } from './intents.js';
 export interface LlmTranslatorDeps {
   /** Anthropic client. Production passes a real `new Anthropic()`; tests pass a stub. */
   client: Pick<Anthropic, 'messages'>;
-  /** Override the model (mostly for tests). Default: 'claude-opus-4-6'. */
+  /** Override the model (mostly for tests). Default: 'claude-sonnet-4-6'. */
   model?: string;
   /**
    * Cap on output tokens. Intent selection is short, so 512 is plenty.
@@ -44,7 +45,7 @@ export interface LlmTranslatorDeps {
   signal?: AbortSignal;
 }
 
-const DEFAULT_MODEL = 'claude-opus-4-6';
+const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_MAX_TOKENS = 512;
 const INTENT_TOOL_NAME = 'emit_intent';
 
@@ -205,6 +206,15 @@ const SYSTEM_PROMPT = [
   '  - When multiple intents could fit, prefer the more specific one (e.g. "CELO income 2024" → tx_type_breakdown with type=INCOME over asset_pnl).',
   '',
   'Network: Celo. Native asset is CELO. Common tokens: cUSD, cEUR, cREAL, USDC, USDT, G$.',
+  '',
+  '## Tax rules reference (for jurisdiction_compat intent)',
+  'When the user asks a jurisdiction_compat question (e.g. "Is LIFO allowed in',
+  'Nigeria?"), use the canonical reference below as the source of truth for',
+  'rates, methods, and reporting rules. Cite the source in `rationale` using',
+  'the format `[src: ' + SKILLS.regulatory.source + ']` so downstream code can',
+  'surface the citation. Do not invent rates or rules not in the reference.',
+  '',
+  SKILLS.regulatory.body,
 ].join('\n');
 
 // ─── Public entrypoint ─────────────────────────────────────────────────────

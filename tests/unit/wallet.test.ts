@@ -74,17 +74,17 @@ function makeStubProvider(
 
 describe('createAgentWallet', () => {
   it('exposes the address derived from the configured private key', () => {
-    const wallet = createAgentWallet(makeTestConfig());
+    const wallet = createAgentWallet(makeTestConfig())!;
     expect(wallet.address.toLowerCase()).toBe(TEST_ACCOUNT.address.toLowerCase());
   });
 
   it('exposes the chain from config', () => {
-    const wallet = createAgentWallet(makeTestConfig());
+    const wallet = createAgentWallet(makeTestConfig())!;
     expect(wallet.chain.id).toBe(celoAlfajores.id);
   });
 
   it('exposes viem public and wallet clients', () => {
-    const wallet = createAgentWallet(makeTestConfig());
+    const wallet = createAgentWallet(makeTestConfig())!;
     expect(wallet.publicClient).toBeDefined();
     expect(wallet.publicClient.chain?.id).toBe(celoAlfajores.id);
     expect(wallet.walletClient).toBeDefined();
@@ -95,20 +95,20 @@ describe('createAgentWallet', () => {
 
 describe('AgentWallet.signMessage', () => {
   it('returns a 0x-prefixed 65-byte EIP-191 signature', async () => {
-    const wallet = createAgentWallet(makeTestConfig());
+    const wallet = createAgentWallet(makeTestConfig())!;
     const sig = await wallet.signMessage('hello agent 06');
     expect(sig).toMatch(/^0x[0-9a-fA-F]{130}$/); // 65 bytes = 130 hex chars
   });
 
   it('is deterministic for a given (key, message) pair', async () => {
-    const wallet = createAgentWallet(makeTestConfig());
+    const wallet = createAgentWallet(makeTestConfig())!;
     const a = await wallet.signMessage('fixed message');
     const b = await wallet.signMessage('fixed message');
     expect(a).toBe(b);
   });
 
   it('differs across keys (no shared secret leak)', async () => {
-    const walletA = createAgentWallet(makeTestConfig());
+    const walletA = createAgentWallet(makeTestConfig())!;
     const otherPk = generatePrivateKey();
     const otherAccount = privateKeyToAccount(otherPk);
     const walletB = createAgentWallet(
@@ -119,7 +119,7 @@ describe('AgentWallet.signMessage', () => {
           account: otherAccount,
         },
       }),
-    );
+    )!;
     const sigA = await walletA.signMessage('same input');
     const sigB = await walletB.signMessage('same input');
     expect(sigA).not.toBe(sigB);
@@ -144,7 +144,7 @@ describe('AgentWallet.getBalance / hasGas', () => {
       chain: celoAlfajores,
       transport: custom(provider),
     });
-    const bal = await stubbedClient.getBalance({ address: wallet.address });
+    const bal = await stubbedClient.getBalance({ address: wallet!.address });
     expect(bal).toBe(100_000_000_000_000_000n); // 0.1 CELO in wei
     expect(provider.calls).toContain('eth_getBalance');
   });

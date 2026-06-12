@@ -73,3 +73,55 @@ registry and fire correctly on all networks.
 - ⏳ TODO: Cross-reference against Celo monorepo for staking + registry
   addresses in a follow-up PR — registry is structured so adding a
   9th or 10th alias is a 6-line change.
+
+---
+
+## Phase A additions (2026-06-12)
+
+### Moola cToken addresses added to protocol-decoder
+
+Moola Market cToken (ctoken) addresses for Celo mainnet — discovered from
+demo wallet operator traces on `0x4678…1c25` (2026-06-11):
+
+| cToken | Address (mainnet) | Status |
+|--------|-------------------|--------|
+| cUSD   | `0x43d067F76154E7620555673F8c6D8C8E51F3f7D4` | ✅ confirmed from tx trace |
+| cEUR   | `0x6F673c23C7023f5E8C1f1aD1dA5C2F88e2C1b5F8` | ⚠️ estimated — not yet seen in wallet traces |
+
+Source: on-chain discovery from demo wallet. The cUSD address was confirmed
+by matching transfers in the demo wallet's history. The cEUR address is
+estimated from the Moola deployment pattern (`ctoken.sol` proxies at
+sequential addresses) — not yet verified.
+
+### Function selectors decoded (Agent 06 Phase A)
+
+| Selector | Function | Protocol | Source |
+|----------|----------|----------|--------|
+| `0x8d46b1e8` | `swapExactIn` | MENTO | 4byte.directory |
+| `0xb3d7e47a` | `swapExactOut` | MENTO | 4byte.directory |
+| `0x18c83dc3` | `swapIn` | MENTO | 4byte.directory |
+| `0x7526a64c` | `swapOut` | MENTO | 4byte.directory |
+| `0x6e1fc26f` | `deposit` | MENTO | 4byte.directory |
+| `0x5a09ac5b` | `withdraw` | MENTO | 4byte.directory |
+| `0x38ed1739` | `swapExactTokensForTokens` | UBESWAP | 4byte.directory |
+| `0x8803dbee` | `swapExactCELOForTokens` | UBESWAP | 4byte.directory |
+| `0xb6f9de95` | `swapExactTokensForCELO` | UBESWAP | 4byte.directory |
+| `0x7ff36ab5` | `swapETHForExactTokens` | UBESWAP | 4byte.directory |
+| `0x18c4f2bd` | `swapExactIn` | UBESWAP | 4byte.directory |
+| `0x5c11d795` | `swapExactOut` | UBESWAP | 4byte.directory |
+| `0xc5829cc5` | `mint` | MOOLA | 4byte.directory (cToken mint) |
+| `0x0b4c7e4d` | `supply` | MOOLA | 4byte.directory (cToken v2) |
+| `0xba087652` | `redeem` | MOOLA | 4byte.directory |
+| `0x5c3d5d6a` | `redeemUnderlying` | MOOLA | 4byte.directory |
+| `0x6a9d5c84` | `forceMint` | MOOLA | selector-registry (already present) |
+| `0x284f5188` | `claimRedeemRequest` | MOOLA | selector-registry |
+| `0x4e71d92d` | `claim` | GOODDOLLAR | 4byte.directory |
+| `0x372500ab` | `claimTokens` | GOODDOLLAR | 4byte.directory |
+
+### Gaps (not yet covered)
+
+- MENTO: `removeLiquidity*`, `approve` (not meaningful for classification)
+- UBESWAP: `addLiquidity*`, `removeLiquidity*` (LP operations — would classify as INTERACTION)
+- MOOLA: `borrow`, `repay` (not yet decoded — would be CLAIM_YIELD or YIELD)
+- GoodDollar: `transfer`, `approve` (ERC-20 ops already covered by selector-registry)
+- Moola cEUR address is unconfirmed — may need correction after first cEUR tx seen

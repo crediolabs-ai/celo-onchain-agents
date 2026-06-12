@@ -149,7 +149,7 @@ export interface ClassifiedTx {
   timestamp: Timestamp;
   assetIn?: AssetLeg;
   assetOut?: AssetLeg;
-  classifierSource: 'rule' | 'llm' | 'flagged';
+  classifierSource: 'rule' | 'rule-protocol' | 'llm' | 'flagged';
   /**
    * LLM confidence in [0, 1]. Only meaningful when classifierSource === 'llm'.
    * Addition #1 (Tuan, 2026-06-08).
@@ -168,6 +168,8 @@ export interface ClassifyOutput {
   classified: ClassifiedTx[];
   flaggedForReview: TxHash[];
   ruleHits: number;
+  /** Count of txs classified by the protocol-decoder (rule-protocol path). Added 2026-06-12. */
+  protocolDecoderHits: number;
   llmFallbacks: number;
   /**
    * Per-protocol-name count of classified txs (e.g. `{ "Mento Broker": 40,

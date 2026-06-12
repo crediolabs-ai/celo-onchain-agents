@@ -60,7 +60,7 @@ function mkClassified(n: number): ClassifyOutput {
     assetIn: { symbol: 'CELO', amount: '1000', priceUsd: 0.5 },
     classifierSource: 'rule' as const,
   }));
-  return { classified: items, flaggedForReview: [], ruleHits: n, llmFallbacks: 0, interactionBreakdown: {} };
+  return { classified: items, flaggedForReview: [], ruleHits: n, protocolDecoderHits: 0, llmFallbacks: 0, interactionBreakdown: {} };
 }
 
 function mkInput(jurisdiction: Jurisdiction, taxableIncome: number, txCount: number): {

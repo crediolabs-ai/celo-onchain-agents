@@ -16,7 +16,7 @@
  *   1. `messages.parse({ output_format: ClassifiedTxSchema })` for output
  *   2. `thinking: { type: 'adaptive' }` for reasoning
  *
- * Model: `claude-opus-4-6` per project default.
+ * Model: `claude-sonnet-4-6` per project default.
  */
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -24,6 +24,7 @@ import { ClassifiedTxSchema, type ClassifiedTx } from '../../shared/types.js';
 import { NetworkError, RateLimitError } from '../../shared/errors.js';
 import { findMatchingRule } from './rules.js';
 import type { PredicateContext } from './predicates.js';
+import { SKILLS } from '../../shared/skills.js';
 
 // ─── Public surface ────────────────────────────────────────────────────────
 
@@ -31,7 +32,7 @@ import type { PredicateContext } from './predicates.js';
 export interface LlmFallbackDeps {
   /** Anthropic client. Production passes a real `new Anthropic()`; tests pass a stub. */
   client: Pick<Anthropic, 'messages'>;
-  /** Override the model (mostly for tests). Default: 'claude-opus-4-6'. */
+  /** Override the model (mostly for tests). Default: 'claude-sonnet-4-6'. */
   model?: string;
   /**
    * Cap on output tokens for the LLM response. Classification is short, so
@@ -46,7 +47,7 @@ export interface LlmFallbackDeps {
   signal?: AbortSignal;
 }
 
-const DEFAULT_MODEL = 'claude-opus-4-6';
+const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_MAX_TOKENS = 1024;
 const CLASSIFY_TOOL_NAME = 'emit_classification';
 
@@ -156,24 +157,21 @@ const SYSTEM_PROMPT = [
   'that a deterministic rule table could not classify. Your job: make the final',
   'call and emit it via the emit_classification tool — no prose.',
   '',
-  'Categories:',
-  '  INCOME          — payment / payroll / airdrop into the wallet',
-  '  SWAP            — DEX or Mento trade (token in, token out, no value in)',
-  '  TRANSFER_IN     — native CELO or token received from an external EOA',
-  '  TRANSFER_OUT    — native CELO or token sent to an external EOA',
-  '  YIELD           — staking / lending / farming reward',
-  '  GAS             — self-send or pure gas-topup',
-  '  MINT / BURN     — token supply change touching the wallet',
-  '  BRIDGE          — cross-chain bridge (Portal, native Celo bridge)',
-  '  MENTO_STABILITY — Mento protocol stability swap (flag for review)',
-  '  UNKNOWN         — genuinely none of the above',
+  'The classification taxonomy and rules you must follow are below. Treat the',
+  'block titled "Canonical reference" as the source of truth; do not invent',
+  'categories or rules not present there.',
   '',
-  'Rules of thumb:',
-  '  - Native value in with no token out and isError=false → likely INCOME / YIELD.',
-  '  - 2+ token transfers in a single tx → likely SWAP.',
-  '  - Single ERC-20 transfer() call with no native movement → TRANSFER_IN/OUT.',
-  '  - Self-send (from == to == wallet) → GAS.',
-  '  - When genuinely uncertain, use UNKNOWN with confidence < 0.5.',
+  '## Canonical reference (source: ' + SKILLS.classification.source + ')',
+  '',
+  SKILLS.classification.body,
+  '',
+  '## Citation rule',
+  'When the rule engine\'s predicate context lists a `matchedRule` or the tx',
+  'matches a specific rule from the canonical reference above, you may simply',
+  'classify. When you classify on heuristic grounds (no matching rule), your',
+  'final `ClassifiedTx` should still match one of the defined categories — and',
+  'the `confidence` field in the emitted object should reflect the heuristic',
+  'basis (< 0.7 for heuristic-only calls).',
   '',
   'Network: Celo. Native asset is CELO. Common tokens: cUSD, cEUR, cREAL, USDC, USDT, G$ (GoodDollar).',
 ].join('\n');

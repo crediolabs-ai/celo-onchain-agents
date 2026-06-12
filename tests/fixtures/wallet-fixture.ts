@@ -237,6 +237,7 @@ const classified: ClassifyOutput = {
   ] satisfies ClassifiedTx[],
   flaggedForReview: [rawTxns[4]!.hash],
   ruleHits: 4,
+  protocolDecoderHits: 0,
   llmFallbacks: 0,
   interactionBreakdown: {},
 };

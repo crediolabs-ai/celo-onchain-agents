@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 
+# Agent runtime state (project memory log, not project source)
+.memo.jsonl
+
 # Generated
 .cache/
 dist/

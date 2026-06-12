@@ -117,8 +117,24 @@ export function decodeLogPayload(data: Hex | undefined): string | null {
  *
  * Sends a 0-value self-tx whose data field encodes the report summary.
  * Throws `WalletError` on RPC failure (orchestrator catches + logs).
+ *
+ * If no agent wallet is configured (read-only path), returns an `EmitFn`
+ * that throws a clear error if invoked. This way the dep is always present
+ * in the pipeline, but using `--emit-onchain-log` without a wallet fails
+ * loudly with a helpful message instead of crashing deep in viem.
  */
-export function createLogEmitter(wallet: AgentWallet): EmitFn {
+export function createLogEmitter(wallet: AgentWallet | undefined): EmitFn {
+  if (!wallet) {
+    return async (): Promise<Hash> => {
+      throw new WalletError(
+        'Cannot emit onchain log: agent wallet is not configured. ' +
+          'Set AGENT_WALLET_PRIVATE_KEY and AGENT_WALLET_ADDRESS in .env, ' +
+          'and fund the wallet with CELO for gas. This is required for ' +
+          'Track 2 (Most Onchain Activity) onchain log emission. ' +
+          'Read-only paths (fetch, classify, PNL, CSV) work without it.',
+      );
+    };
+  }
   return async (input: EmitInput): Promise<Hash> => {
     const payload = buildLogPayload(input);
     const data = asciiToHexData(payload);

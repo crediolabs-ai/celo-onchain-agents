@@ -122,7 +122,12 @@ export interface AgentWallet {
 // ─── Factory ─────────────────────────────────────────────────────────────────
 
 /** Build an `AgentWallet` from validated app config. */
-export function createAgentWallet(config: AppConfig): AgentWallet {
+export function createAgentWallet(config: AppConfig): AgentWallet | undefined {
+  // Agent wallet is optional — only present when AGENT_WALLET_PRIVATE_KEY is set.
+  // Read-only paths (fetch, classify, PNL, CSV) work without a wallet; write
+  // paths (e.g. --emit-onchain-log) need it.
+  if (!config.agentWallet) return undefined;
+
   const { chain, celoRpcUrl, agentWallet } = config;
   const account = agentWallet.account;
   const address = account.address;

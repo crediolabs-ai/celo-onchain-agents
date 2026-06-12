@@ -36,7 +36,7 @@ describe('loadConfig', () => {
     expect(cfg.chainId).toBe(44787);
     expect(cfg.celoRpcUrl).toBe(RPC);
     expect(cfg.celoscanApiUrl).toBe(SCAN);
-    expect(cfg.agentWallet.address.toLowerCase()).toBe(kp.address.toLowerCase());
+    expect(cfg.agentWallet!.address.toLowerCase()).toBe(kp.address.toLowerCase());
   });
 
   it('rejects mismatched address/private key pair', () => {

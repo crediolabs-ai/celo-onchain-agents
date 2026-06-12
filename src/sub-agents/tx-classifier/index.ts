@@ -52,15 +52,15 @@ import {
   type ProtocolEntry,
 } from '../../shared/protocol-registry.js';
 import {
-  buildSelectorIndex,
   extractSelector,
   lookupSelector,
   type SelectorCategory,
-  type SelectorEntry,
 } from '../../shared/selector-registry.js';
 import { findMatchingRule } from './rules.js';
 import { llmClassifyTx, type LlmFallbackDeps } from './llm-fallback.js';
 import type { PredicateContext } from './predicates.js';
+import { decodeProtocolAction } from './protocol-decoder.js';
+import { protocolActionToTxType } from './protocol-actions.js';
 
 // ─── Public surface ────────────────────────────────────────────────────────
 
@@ -162,9 +162,6 @@ export async function classifyWithDeps(
   const contractMetadata = fetched.contractMetadata ?? new Map();
   // Native-token index (CELO, cUSD, USDC, …) for token-address → name lookups.
   const protocolIndex = buildProtocolIndex();
-  // Function-selector index (ERC-20/721 + Celo core + EAS + Moola + TGE + …).
-  // Used to name txs whose contracts Celoscan couldn't verify.
-  const selectorIndex = buildSelectorIndex();
   // Reverse index from contract name → entry, populated as we see new names.
   // The breakdown counter is keyed by canonical contract name.
   const interactionBreakdown: Record<string, number> = {};
@@ -172,6 +169,7 @@ export async function classifyWithDeps(
   const classified: ClassifiedTx[] = [];
   const flaggedForReview: TxHash[] = [];
   let ruleHits = 0;
+  let protocolDecoderHits = 0;
   let llmFallbacks = 0;
   let llmCallsRemaining = maxLlmCallsPerReport;
 
@@ -244,6 +242,29 @@ export async function classifyWithDeps(
       continue;
     }
 
+    // 2.7. Protocol-decoder path (Agent 06 Phase A): decode protocol semantics
+    //      from function selector + known router/broker addresses. This lifts
+    //      vault deposits / Moola mints / GoodDollar claims from UNKNOWN to
+    //      named actions. Complementary to the rule table — rule table fires
+    //      first; decoder fires only when rule + protocol-name paths missed.
+    const protocolDecoded = decodeProtocolAction(tx, ctx.transfers);
+    if (protocolDecoded) {
+      protocolDecoderHits += 1;
+      const txType = protocolActionToTxType(protocolDecoded.protocol, protocolDecoded.action);
+      const belowThreshold = protocolDecoded.confidence < minRuleConfidence;
+      const txOut: ClassifiedTx = {
+        hash: tx.hash,
+        type: txType,
+        timestamp: tx.timestamp,
+        classifierSource: belowThreshold ? 'flagged' : 'rule-protocol',
+        confidence: protocolDecoded.confidence,
+        notes: `${protocolDecoded.protocol}:${protocolDecoded.action} (${protocolDecoded.functionName})`,
+      };
+      classified.push(txOut);
+      if (belowThreshold) flaggedForReview.push(tx.hash);
+      continue;
+    }
+
     // 3. No rule and no protocol hit. Decide between LLM fallback and flag.
     if (llm && llmCallsRemaining > 0) {
       llmCallsRemaining -= 1;
@@ -292,6 +313,7 @@ export async function classifyWithDeps(
     classified: validated,
     flaggedForReview,
     ruleHits,
+    protocolDecoderHits,
     llmFallbacks,
     interactionBreakdown,
   };
