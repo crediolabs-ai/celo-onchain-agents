@@ -1,0 +1,24 @@
+{
+  "name": "celo-tax-portfolio-mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "MCP server for Celo Tax & Portfolio Agent — exposes on-chain portfolio and transaction history tools",
+  "engines": {
+    "node": ">=20.18"
+  },
+  "scripts": {
+    "dev": "tsx src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "viem": "^2.52.0",
+    "zod": "3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
