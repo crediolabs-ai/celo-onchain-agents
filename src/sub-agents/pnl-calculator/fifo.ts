@@ -19,9 +19,10 @@ import {
   type EngineResult,
   DEFAULT_DECIMALS,
   isAcquisition,
-  isDisposal,
   isGas,
+  isLotConsumption,
   lotFromAcquisition,
+  lotKey,
   lotPricePerUnitUsd,
 } from './engine.js';
 
@@ -60,15 +61,16 @@ export function computeFifo(input: FifoInput): EngineResult {
     // ─── Acquisitions ────────────────────────────────────────────────────
     if (isAcquisition(c) && c.assetIn) {
       const symbol = c.assetIn.symbol;
+      const vaultAddress = c.vaultAddress;
       const decimals = decimalsBySymbol[symbol] ?? 18;
       const source: AssetLot['source'] =
         c.aggregatedFromHashes !== undefined
           ? 'aggregated'
           : (c.classifierSource as AssetLot['source']);
-      const lot = lotFromAcquisition(c.assetIn, decimals, c.hash, source, c.timestamp);
-      const queue = lots.get(symbol) ?? [];
+      const lot = lotFromAcquisition(c.assetIn, decimals, c.hash, source, c.timestamp, vaultAddress);
+      const queue = lots.get(lotKey(symbol, vaultAddress)) ?? [];
       queue.push(lot);
-      lots.set(symbol, queue);
+      lots.set(lotKey(symbol, vaultAddress), queue);
 
       if (c.type === 'INCOME') incomeMicroUsdTotal += lot.costBasisMicroUsd;
       if (c.type === 'YIELD') yieldMicroUsdTotal += lot.costBasisMicroUsd;
@@ -76,13 +78,19 @@ export function computeFifo(input: FifoInput): EngineResult {
     }
 
     // ─── Disposals ───────────────────────────────────────────────────────
-    if (isDisposal(c) && c.assetOut) {
+    // YIELD with assetOut is a vault withdraw (shares surrendered, underlying received).
+    // TRANSFER_OUT / SWAP are regular disposals. Both consume from the lot queue.
+    if (isLotConsumption(c) && c.assetOut) {
       const symbol = c.assetOut.symbol;
+      const vaultAddress = c.vaultAddress;
       const decimals = decimalsBySymbol[symbol] ?? 18;
       const decimalsAdj = BigInt(10) ** BigInt(decimals);
-      const queue = lots.get(symbol) ?? [];
+      const queue = lots.get(lotKey(symbol, vaultAddress)) ?? [];
       let remaining = BigInt(c.assetOut.amount);
-      const priceMicro = BigInt(Math.round(c.assetOut.priceUsd * 1_000_000));
+      // Use assetIn price when available (underlying received on vault withdraw);
+      // fall back to assetOut price for non-vault disposals.
+      const priceUsd = c.assetIn?.priceUsd ?? c.assetOut.priceUsd;
+      const priceMicro = BigInt(Math.round(priceUsd * 1_000_000));
 
       // Walk the FIFO queue from the front.
       while (remaining > 0n && queue.length > 0) {
@@ -95,7 +103,6 @@ export function computeFifo(input: FifoInput): EngineResult {
         const gainMicro = proceedsConsumedMicro - costBasisConsumedMicro;
 
         const lotPriceUsd = lotPricePerUnitUsd(front);
-        const disposalPriceUsd = c.assetOut.priceUsd;
 
         disposals.push({
           amount: take,
@@ -105,7 +112,7 @@ export function computeFifo(input: FifoInput): EngineResult {
           gainMicroUsd: gainMicro,
           sourceHash: c.hash,
           lotSourceHash: front.sourceHash,
-          disposalPriceUsd,
+          disposalPriceUsd: priceUsd,
           lotPriceUsd,
           timestamp: c.timestamp,
         });

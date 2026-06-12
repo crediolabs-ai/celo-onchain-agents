@@ -37,6 +37,7 @@ function mkAcquisition(overrides: {
   timestamp: Timestamp;
   source?: 'rule' | 'llm' | 'flagged';
   type?: 'INCOME' | 'TRANSFER_IN' | 'YIELD';
+  vaultAddress?: Address;
 }): ClassifiedTx {
   const hash = mkHash();
   return {
@@ -49,6 +50,7 @@ function mkAcquisition(overrides: {
       priceUsd: overrides.priceUsd,
     },
     classifierSource: overrides.source ?? 'rule',
+    ...(overrides.vaultAddress !== undefined ? { vaultAddress: overrides.vaultAddress } : {}),
   };
 }
 
@@ -58,9 +60,12 @@ function mkDisposal(overrides: {
   priceUsd: number;
   timestamp: Timestamp;
   type?: 'TRANSFER_OUT' | 'SWAP';
+  vaultAddress?: Address;
+  assetInSymbol?: string;
+  assetInPriceUsd?: number;
 }): ClassifiedTx {
   const hash = mkHash();
-  return {
+  const base: ClassifiedTx = {
     hash,
     timestamp: overrides.timestamp,
     type: overrides.type ?? 'TRANSFER_OUT',
@@ -71,6 +76,17 @@ function mkDisposal(overrides: {
     },
     classifierSource: 'rule',
   };
+  if (overrides.assetInSymbol !== undefined) {
+    base.assetIn = {
+      symbol: overrides.assetInSymbol,
+      amount: overrides.amount,
+      priceUsd: overrides.assetInPriceUsd ?? 1.0,
+    };
+  }
+  if (overrides.vaultAddress !== undefined) {
+    base.vaultAddress = overrides.vaultAddress;
+  }
+  return base;
 }
 
 function mkGas(timestamp: Timestamp): ClassifiedTx {
@@ -193,6 +209,155 @@ describe('FIFO', () => {
     // 1 disposal gain of 0.5 USD.
     expect(result.realizedPnlMicroUsdByAsset['CELO']).toBe(500_000n);
   });
+
+  // ─── ERC-4626 vault regression tests ───────────────────────────────────
+
+  const VAULT_A = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001' as Address;
+  const VAULT_B = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0001' as Address;
+  // 1 share = 1e6 (USDC decimals)
+  const ONE_USDC_VAULT = '1000000';
+  const TWO_USDC_VAULT = '2000000';
+
+  it('FIFO: two deposits into same vault create two separate lots', () => {
+    const result = computeFifo({
+      classified: [
+        mkAcquisition({ symbol: 'USDy', amount: ONE_USDC_VAULT, priceUsd: 1.0, timestamp: TS_2024, vaultAddress: VAULT_A }),
+        mkAcquisition({ symbol: 'USDy', amount: ONE_USDC_VAULT, priceUsd: 1.1, timestamp: TS_2024_MID, vaultAddress: VAULT_A }),
+      ],
+    });
+    // Two lots queued under the per-vault key.
+    const queue = result.remainingLots.get(`${VAULT_A}:USDy`);
+    expect(queue).toHaveLength(2);
+    // Each lot kept its own cost basis.
+    expect(queue![0]!.costBasisMicroUsd).toBe(1_000_000n);
+    expect(queue![1]!.costBasisMicroUsd).toBe(1_100_000n);
+  });
+
+  it('FIFO: two deposits into DIFFERENT vaults stay in separate queues (same symbol)', () => {
+    const result = computeFifo({
+      classified: [
+        mkAcquisition({ symbol: 'USDy', amount: ONE_USDC_VAULT, priceUsd: 1.0, timestamp: TS_2024, vaultAddress: VAULT_A }),
+        mkAcquisition({ symbol: 'USDy', amount: ONE_USDC_VAULT, priceUsd: 1.1, timestamp: TS_2024_MID, vaultAddress: VAULT_B }),
+      ],
+    });
+    const queueA = result.remainingLots.get(`${VAULT_A}:USDy`);
+    const queueB = result.remainingLots.get(`${VAULT_B}:USDy`);
+    expect(queueA).toHaveLength(1);
+    expect(queueB).toHaveLength(1);
+    expect(queueA![0]!.costBasisMicroUsd).toBe(1_000_000n);
+    expect(queueB![0]!.costBasisMicroUsd).toBe(1_100_000n);
+    // No merged "USDy" key.
+    expect(result.remainingLots.get('USDy')).toBeUndefined();
+  });
+
+  it('FIFO: withdraw from vault A consumes only vault A lots, not vault B', () => {
+    const result = computeFifo({
+      classified: [
+        mkAcquisition({ symbol: 'USDy', amount: ONE_USDC_VAULT, priceUsd: 1.0, timestamp: TS_2024, vaultAddress: VAULT_A }),
+        mkAcquisition({ symbol: 'USDy', amount: TWO_USDC_VAULT, priceUsd: 1.0, timestamp: TS_2024_MID, vaultAddress: VAULT_B }),
+        // Withdraw from vault A — consumes 1 lot from vault A only.
+        {
+          ...mkDisposal({ symbol: 'USDy', amount: ONE_USDC_VAULT, priceUsd: 1.0, timestamp: TS_2024_LATE, vaultAddress: VAULT_A }),
+          assetIn: { symbol: 'USDC', amount: ONE_USDC_VAULT, priceUsd: 1.0 },
+        },
+      ],
+    });
+    // Vault A queue is now empty; vault B is untouched.
+    expect(result.remainingLots.get(`${VAULT_A}:USDy`)).toHaveLength(0);
+    expect(result.remainingLots.get(`${VAULT_B}:USDy`)).toHaveLength(1);
+    expect(result.disposals).toHaveLength(1);
+    expect(result.disposals[0]!.gainMicroUsd).toBe(0n); // 1:1 vault
+  });
+
+  it('FIFO: vault withdraw as YIELD disposal — the previously-silent YIELD-skip bug is fixed', () => {
+    // Before the fix, YIELD with assetOut was silently skipped. Now it produces a real Disposal.
+    const result = computeFifo({
+      classified: [
+        mkAcquisition({ symbol: 'USDy', amount: ONE_USDC_VAULT, priceUsd: 1.0, timestamp: TS_2024, vaultAddress: VAULT_A }),
+        // Vault withdraw classified as YIELD (per protocolActionToTxType mapping).
+        // assetIn = underlying (USDC received), assetOut = shares (USDy surrendered).
+        {
+          hash: mkHash(),
+          timestamp: TS_2024_MID,
+          type: 'YIELD',
+          assetIn: { symbol: 'USDC', amount: ONE_USDC_VAULT, priceUsd: 1.0 },
+          assetOut: { symbol: 'USDy', amount: ONE_USDC_VAULT, priceUsd: 1.0 },
+          classifierSource: 'rule',
+          vaultAddress: VAULT_A,
+        },
+      ],
+    });
+    expect(result.disposals).toHaveLength(1);
+    const d = result.disposals[0]!;
+    // Proceeds = USDC received (assetIn.priceUsd = 1.0), cost basis = USDy paid.
+    expect(d.proceedsMicroUsd).toBe(1_000_000n);
+    expect(d.costBasisMicroUsd).toBe(1_000_000n);
+    expect(d.gainMicroUsd).toBe(0n);
+    // Vault A queue fully consumed.
+    expect(result.remainingLots.get(`${VAULT_A}:USDy`)).toHaveLength(0);
+  });
+
+  it('FIFO: existing non-vault lots are unaffected (no vaultAddress → plain symbol key)', () => {
+    const result = computeFifo({
+      classified: [
+        mkAcquisition({ symbol: 'CELO', amount: ONE_CELO, priceUsd: 0.5, timestamp: TS_2024 }),
+        mkDisposal({ symbol: 'CELO', amount: ONE_CELO, priceUsd: 0.8, timestamp: TS_2024_MID }),
+      ],
+    });
+    expect(result.disposals).toHaveLength(1);
+    expect(result.disposals[0]!.gainMicroUsd).toBe(300_000n);
+    expect(result.remainingLots.get('CELO')).toHaveLength(0);
+  });
+
+  // Plan §8.3 mandate: staking-reward YIELD (assetIn only, no assetOut) must
+  // still be income, not a disposal. The isAcquisition() tightening in
+  // engine.ts:140 must not regress this path.
+  it('FIFO: staking-reward YIELD (assetIn only, no assetOut) is income, not disposal', () => {
+    const result = computeFifo({
+      classified: [
+        // Staking reward: YIELD with only assetIn (no assetOut) — pure income.
+        {
+          hash: mkHash(),
+          timestamp: TS_2024,
+          type: 'YIELD',
+          assetIn: { symbol: 'G$', amount: '1000000000000000000', priceUsd: 0.001 },
+          classifierSource: 'rule',
+        },
+      ],
+    });
+    // No disposals — staking reward is income, not a lot-consuming event.
+    expect(result.disposals).toHaveLength(0);
+    // yieldMicroUsdTotal = 0.001 * 1 G$ = 0.001 USD = 1_000 micro-USD.
+    expect(result.yieldMicroUsdTotal).toBe(1_000n);
+    // The G$ lot is queued under the plain symbol (no vaultAddress).
+    expect(result.remainingLots.get('G$')).toHaveLength(1);
+  });
+
+  // Defensive default: YIELD with assetOut but no assetIn is treated as a
+  // disposal (vault-withdraw edge case where the underlying transfer wasn't
+  // picked up by the classifier). Pinning the behavior so it doesn't drift.
+  it('FIFO: YIELD with assetOut only (no assetIn) is treated as a disposal', () => {
+    const result = computeFifo({
+      classified: [
+        mkAcquisition({ symbol: 'USDy', amount: ONE_USDC_VAULT, priceUsd: 1.0, timestamp: TS_2024, vaultAddress: VAULT_A }),
+        // YIELD with only assetOut (assetIn missing) — defensive disposal.
+        {
+          hash: mkHash(),
+          timestamp: TS_2024_MID,
+          type: 'YIELD',
+          assetOut: { symbol: 'USDy', amount: ONE_USDC_VAULT, priceUsd: 1.0 },
+          classifierSource: 'rule',
+          vaultAddress: VAULT_A,
+        },
+      ],
+    });
+    expect(result.disposals).toHaveLength(1);
+    // Falls through to assetOut.priceUsd (assetIn is undefined).
+    expect(result.disposals[0]!.proceedsMicroUsd).toBe(1_000_000n);
+    expect(result.disposals[0]!.costBasisMicroUsd).toBe(1_000_000n);
+    expect(result.disposals[0]!.gainMicroUsd).toBe(0n);
+    expect(result.remainingLots.get(`${VAULT_A}:USDy`)).toHaveLength(0);
+  });
 });
 
 // ─── LIFO ──────────────────────────────────────────────────────────────────
@@ -243,6 +408,45 @@ describe('LIFO', () => {
     expect(remaining).toHaveLength(1);
     expect(remaining[0]!.amount).toBe(BigInt(HALF_CELO));
   });
+
+  // ─── ERC-4626 vault regression tests ───────────────────────────────────
+
+  const VAULT_A = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001' as Address;
+  const VAULT_B = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0001' as Address;
+  const ONE_USDC_VAULT = '1000000';
+
+  it('LIFO: two deposits into DIFFERENT vaults stay in separate queues', () => {
+    const result = computeLifo({
+      classified: [
+        mkAcquisition({ symbol: 'USDy', amount: ONE_USDC_VAULT, priceUsd: 1.0, timestamp: TS_2024, vaultAddress: VAULT_A }),
+        mkAcquisition({ symbol: 'USDy', amount: ONE_USDC_VAULT, priceUsd: 1.1, timestamp: TS_2024_MID, vaultAddress: VAULT_B }),
+      ],
+    });
+    const queueA = result.remainingLots.get(`${VAULT_A}:USDy`);
+    const queueB = result.remainingLots.get(`${VAULT_B}:USDy`);
+    expect(queueA).toHaveLength(1);
+    expect(queueB).toHaveLength(1);
+  });
+
+  it('LIFO: vault withdraw consumes newest lot from that vault only', () => {
+    const result = computeLifo({
+      classified: [
+        mkAcquisition({ symbol: 'USDy', amount: ONE_USDC_VAULT, priceUsd: 1.0, timestamp: TS_2024, vaultAddress: VAULT_A }),
+        mkAcquisition({ symbol: 'USDy', amount: ONE_USDC_VAULT, priceUsd: 1.2, timestamp: TS_2024_MID, vaultAddress: VAULT_A }),
+        // Withdraw from vault A — LIFO consumes newest lot first (price 1.2).
+        {
+          ...mkDisposal({ symbol: 'USDy', amount: ONE_USDC_VAULT, priceUsd: 1.0, timestamp: TS_2024_LATE, vaultAddress: VAULT_A }),
+          assetIn: { symbol: 'USDC', amount: ONE_USDC_VAULT, priceUsd: 1.0 },
+        },
+      ],
+    });
+    expect(result.remainingLots.get(`${VAULT_A}:USDy`)).toHaveLength(1);
+    // Older lot (1.0) remains; newer lot (1.2) was consumed.
+    expect(result.remainingLots.get(`${VAULT_A}:USDy`)![0]!.costBasisMicroUsd).toBe(1_000_000n);
+    expect(result.disposals).toHaveLength(1);
+    expect(result.disposals[0]!.costBasisMicroUsd).toBe(1_200_000n); // newest lot consumed
+    expect(result.disposals[0]!.gainMicroUsd).toBe(-200_000n); // paid 1.2, received 1.0
+  });
 });
 
 // ─── WAC ───────────────────────────────────────────────────────────────────
@@ -282,6 +486,46 @@ describe('WAC', () => {
     expect(result.disposals).toHaveLength(1);
     expect(result.disposals[0]!.amount).toBe(BigInt(ONE_CELO));
     expect(result.priceGaps).toEqual([{ asset: 'CELO', timestamp: TS_2024_MID }]);
+  });
+
+  // ─── ERC-4626 vault regression tests ───────────────────────────────────
+
+  const VAULT_A = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001' as Address;
+  const VAULT_B = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0001' as Address;
+  const ONE_USDC_VAULT = '1000000';
+
+  it('WAC: two deposits into different vaults maintain separate running averages', () => {
+    const result = computeWac({
+      classified: [
+        mkAcquisition({ symbol: 'USDy', amount: ONE_USDC_VAULT, priceUsd: 1.0, timestamp: TS_2024, vaultAddress: VAULT_A }),
+        mkAcquisition({ symbol: 'USDy', amount: ONE_USDC_VAULT, priceUsd: 1.2, timestamp: TS_2024_MID, vaultAddress: VAULT_B }),
+      ],
+    });
+    const poolA = result.remainingLots.get(`${VAULT_A}:USDy`);
+    const poolB = result.remainingLots.get(`${VAULT_B}:USDy`);
+    expect(poolA).toHaveLength(1);
+    expect(poolB).toHaveLength(1);
+    // Vault A avg = 1.0, Vault B avg = 1.2
+    expect(poolA![0]!.costBasisMicroUsd).toBe(1_000_000n);
+    expect(poolB![0]!.costBasisMicroUsd).toBe(1_200_000n);
+  });
+
+  it('WAC: vault withdraw disposes against only that vault\'s pool', () => {
+    const result = computeWac({
+      classified: [
+        mkAcquisition({ symbol: 'USDy', amount: ONE_USDC_VAULT, priceUsd: 1.0, timestamp: TS_2024, vaultAddress: VAULT_A }),
+        mkAcquisition({ symbol: 'USDy', amount: ONE_USDC_VAULT, priceUsd: 1.0, timestamp: TS_2024_MID, vaultAddress: VAULT_B }),
+        // Withdraw from vault A only — should consume vault A's 1.0 avg lot, vault B untouched.
+        {
+          ...mkDisposal({ symbol: 'USDy', amount: ONE_USDC_VAULT, priceUsd: 1.0, timestamp: TS_2024_LATE, vaultAddress: VAULT_A }),
+          assetIn: { symbol: 'USDC', amount: ONE_USDC_VAULT, priceUsd: 1.0 },
+        },
+      ],
+    });
+    expect(result.remainingLots.get(`${VAULT_A}:USDy`)).toHaveLength(0); // consumed
+    expect(result.remainingLots.get(`${VAULT_B}:USDy`)).toHaveLength(1); // untouched
+    expect(result.disposals).toHaveLength(1);
+    expect(result.disposals[0]!.gainMicroUsd).toBe(0n);
   });
 });
 

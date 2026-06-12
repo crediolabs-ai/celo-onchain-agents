@@ -168,6 +168,13 @@ export interface ClassifiedTx {
    */
   aggregatedFromHashes?: TxHash[];
   notes?: string;
+  /**
+   * Vault address for ERC-4626 transactions. Populated by the classifier when
+   * the tx interacts with a registered vault (deposit/mint = acquisition;
+   * withdraw/redeem = disposal). Enables per-vault lot identity so two vaults
+   * with the same share symbol are tracked in separate queues.
+   */
+  vaultAddress?: Address;
 }
 
 export interface ClassifyOutput {

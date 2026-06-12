@@ -13,7 +13,7 @@
  * is the only way to avoid cent-level drift on long histories.
  */
 
-import type { TxHash, ClassifiedTx, AssetLeg, Timestamp } from '../../shared/types.js';
+import type { Address, TxHash, ClassifiedTx, AssetLeg, Timestamp } from '../../shared/types.js';
 
 export interface AssetLot {
   /** Token amount in smallest unit (e.g. wei for CELO, 6-dec for USDC). */
@@ -30,6 +30,12 @@ export interface AssetLot {
   sourceHash: TxHash;
   /** Provenance: which classifier path produced the lot. */
   source: 'rule' | 'llm' | 'flagged' | 'aggregated';
+  /**
+   * Vault address for ERC-4626 share tokens — disambiguates lots from
+   * different vaults that share the same symbol. Optional so non-vault
+   * lots are unaffected (undefined degenerates to plain symbol-keyed queue).
+   */
+  vaultAddress?: Address;
 }
 
 export interface Disposal {
@@ -77,6 +83,7 @@ export const DEFAULT_DECIMALS: Record<string, number> = {
   USDC: 6,
   USDT: 6,
   G$: 18, // GoodDollar
+  USDy: 6, // Untangled USDy — ERC-4626 vault share wrapping USDC (verified on-chain 2026-06-12)
 };
 
 /** USD price per whole token (1.0 CELO), given a lot's real-micro-USD cost basis. */
@@ -88,6 +95,16 @@ export function lotPricePerUnitUsd(lot: {
   if (lot.costBasisMicroUsd === 0n) return 0;
   const decimalsAdj = BigInt(10) ** BigInt(lot.decimals);
   return Number((lot.costBasisMicroUsd * decimalsAdj) / lot.amount) / 1_000_000;
+}
+
+/** Queue key for per-(vault, symbol) lot tracking.
+ *
+ *  For ERC-4626 share tokens, lots from different vaults are tracked
+ *  separately even when the share symbol is the same (e.g. two USDC vaults
+ *  both issuing "usdcVault" shares). Non-vault lots use the plain symbol.
+ */
+export function lotKey(symbol: string, vaultAddress?: Address): string {
+  return vaultAddress ? `${vaultAddress.toLowerCase()}:${symbol}` : symbol;
 }
 
 /** Build an AssetLot from a classified acquisition event.
@@ -103,6 +120,7 @@ export function lotFromAcquisition(
   sourceHash: TxHash,
   source: AssetLot['source'],
   timestamp: Timestamp,
+  vaultAddress?: Address,
 ): AssetLot {
   const amountRaw = BigInt(asset.amount);
   const decimalsAdj = BigInt(10) ** BigInt(decimals);
@@ -115,20 +133,42 @@ export function lotFromAcquisition(
     timestamp,
     sourceHash,
     source,
+    ...(vaultAddress !== undefined ? { vaultAddress } : {}),
   };
 }
 
-/** Whether a classified tx is an acquisition event (adds to the lot queue). */
+/** Whether a classified tx is an acquisition event (adds to the lot queue).
+ *
+ *  YIELD-with-assetOut (vault withdraw: shares surrendered, underlying received)
+ *  is treated as a disposal, NOT an acquisition — see isLotConsumption(). The
+ *  exclusion here prevents isAcquisition from short-circuiting the iteration
+ *  and creating a phantom lot for the incoming underlying.
+ */
 export function isAcquisition(c: ClassifiedTx): boolean {
   return (
     (c.type === 'TRANSFER_IN' || c.type === 'INCOME' || c.type === 'YIELD') &&
-    c.assetIn !== undefined
+    c.assetIn !== undefined &&
+    !(c.type === 'YIELD' && c.assetOut !== undefined)
   );
 }
 
 /** Whether a classified tx is a disposal event (consumes from the lot queue). */
 export function isDisposal(c: ClassifiedTx): boolean {
   return (c.type === 'TRANSFER_OUT' || c.type === 'SWAP') && c.assetOut !== undefined;
+}
+
+/** Whether a classified tx consumes from the lot queue (disposal-like).
+ *
+ *  Extends isDisposal() to also fire for YIELD-with-assetOut — the vault
+ *  withdraw pattern (surrender shares, receive underlying). Staking-reward
+ *  YIELD (assetIn only) still goes through the acquisition branch.
+ *
+ *  Use as: `if (isLotConsumption(c)) { ... walk queue, emit Disposal ... }`.
+ */
+export function isLotConsumption(c: ClassifiedTx): boolean {
+  if (c.type === 'TRANSFER_OUT' || c.type === 'SWAP') return c.assetOut !== undefined;
+  if (c.type === 'YIELD') return c.assetOut !== undefined;
+  return false;
 }
 
 /** Whether a classified tx is a pure gas event (no asset leg). */

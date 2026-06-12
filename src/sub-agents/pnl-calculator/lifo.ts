@@ -17,9 +17,10 @@ import {
   type EngineResult,
   DEFAULT_DECIMALS,
   isAcquisition,
-  isDisposal,
   isGas,
+  isLotConsumption,
   lotFromAcquisition,
+  lotKey,
   lotPricePerUnitUsd,
 } from './engine.js';
 
@@ -47,27 +48,30 @@ export function computeLifo(input: LifoInput): EngineResult {
   for (const c of input.classified) {
     if (isAcquisition(c) && c.assetIn) {
       const symbol = c.assetIn.symbol;
+      const vaultAddress = c.vaultAddress;
       const decimals = decimalsBySymbol[symbol] ?? 18;
       const source: AssetLot['source'] =
         c.aggregatedFromHashes !== undefined
           ? 'aggregated'
           : (c.classifierSource as AssetLot['source']);
-      const lot = lotFromAcquisition(c.assetIn, decimals, c.hash, source, c.timestamp);
-      const queue = lots.get(symbol) ?? [];
+      const lot = lotFromAcquisition(c.assetIn, decimals, c.hash, source, c.timestamp, vaultAddress);
+      const queue = lots.get(lotKey(symbol, vaultAddress)) ?? [];
       queue.push(lot);
-      lots.set(symbol, queue);
+      lots.set(lotKey(symbol, vaultAddress), queue);
       if (c.type === 'INCOME') incomeMicroUsdTotal += lot.costBasisMicroUsd;
       if (c.type === 'YIELD') yieldMicroUsdTotal += lot.costBasisMicroUsd;
       continue;
     }
 
-    if (isDisposal(c) && c.assetOut) {
+    if (isLotConsumption(c) && c.assetOut) {
       const symbol = c.assetOut.symbol;
+      const vaultAddress = c.vaultAddress;
       const decimals = decimalsBySymbol[symbol] ?? 18;
       const decimalsAdj = BigInt(10) ** BigInt(decimals);
-      const queue = lots.get(symbol) ?? [];
+      const queue = lots.get(lotKey(symbol, vaultAddress)) ?? [];
       let remaining = BigInt(c.assetOut.amount);
-      const priceMicro = BigInt(Math.round(c.assetOut.priceUsd * 1_000_000));
+      const priceUsd = c.assetIn?.priceUsd ?? c.assetOut.priceUsd;
+      const priceMicro = BigInt(Math.round(priceUsd * 1_000_000));
 
       // Walk the LIFO queue from the back (newest lot first).
       while (remaining > 0n && queue.length > 0) {
@@ -89,7 +93,7 @@ export function computeLifo(input: LifoInput): EngineResult {
           gainMicroUsd: gainMicro,
           sourceHash: c.hash,
           lotSourceHash: back.sourceHash,
-          disposalPriceUsd: c.assetOut.priceUsd,
+          disposalPriceUsd: priceUsd,
           lotPriceUsd,
           timestamp: c.timestamp,
         });

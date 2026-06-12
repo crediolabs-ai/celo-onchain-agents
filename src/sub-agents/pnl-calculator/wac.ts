@@ -11,15 +11,16 @@
  * Bigint amounts in token units; cost basis tracked in micro-USD.
  */
 
-import type { ClassifiedTx, Timestamp } from '../../shared/types.js';
+import type { Address, ClassifiedTx, Timestamp } from '../../shared/types.js';
 import {
   type AssetLot,
   type Disposal,
   type EngineResult,
   DEFAULT_DECIMALS,
   isAcquisition,
-  isDisposal,
   isGas,
+  isLotConsumption,
+  lotKey,
   lotPricePerUnitUsd,
 } from './engine.js';
 
@@ -29,7 +30,7 @@ export interface WacInput {
   gasPriceUsdByTimestamp?: (timestamp: Timestamp) => number | undefined;
 }
 
-/** Single running-average lot per symbol. */
+/** Single running-average lot per symbol or per-(vault, symbol). */
 interface WacState {
   amount: bigint;
   costBasisMicroUsd: bigint;
@@ -37,6 +38,8 @@ interface WacState {
   lastPriceUsd: number;
   lastTimestamp: Timestamp;
   lastSourceHash: import('../../shared/types.js').TxHash;
+  /** Vault address for ERC-4626 share tokens. undefined means non-vault (plain symbol). */
+  vaultAddress: Address | undefined;
 }
 
 export function computeWac(input: WacInput): EngineResult {
@@ -57,31 +60,35 @@ export function computeWac(input: WacInput): EngineResult {
   for (const c of input.classified) {
     if (isAcquisition(c) && c.assetIn) {
       const symbol = c.assetIn.symbol;
+      const vaultAddress = c.vaultAddress;
+      const key = lotKey(symbol, vaultAddress);
       const decimals = decimalsBySymbol[symbol] ?? 18;
       const decimalsAdj = BigInt(10) ** BigInt(decimals);
       const amount = BigInt(c.assetIn.amount);
       // REAL micro-USD for the lot (not micro-USD × wei).
       const costMicro =
         (BigInt(Math.round(c.assetIn.priceUsd * 1_000_000)) * amount) / decimalsAdj;
-      const cur = state.get(symbol);
+      const cur = state.get(key);
 
       if (!cur || cur.amount === 0n) {
-        state.set(symbol, {
+        state.set(key, {
           amount,
           costBasisMicroUsd: costMicro,
           decimals,
           lastPriceUsd: c.assetIn.priceUsd,
           lastTimestamp: c.timestamp,
           lastSourceHash: c.hash,
+          vaultAddress,
         });
       } else {
-        state.set(symbol, {
+        state.set(key, {
           amount: cur.amount + amount,
           costBasisMicroUsd: cur.costBasisMicroUsd + costMicro,
           decimals: cur.decimals,
           lastPriceUsd: c.assetIn.priceUsd,
           lastTimestamp: c.timestamp,
           lastSourceHash: c.hash,
+          vaultAddress: cur.vaultAddress,
         });
       }
       if (c.type === 'INCOME') incomeMicroUsdTotal += costMicro;
@@ -89,9 +96,11 @@ export function computeWac(input: WacInput): EngineResult {
       continue;
     }
 
-    if (isDisposal(c) && c.assetOut) {
+    if (isLotConsumption(c) && c.assetOut) {
       const symbol = c.assetOut.symbol;
-      const cur = state.get(symbol);
+      const vaultAddress = c.vaultAddress;
+      const key = lotKey(symbol, vaultAddress);
+      const cur = state.get(key);
       if (!cur || cur.amount === 0n) {
         priceGaps.push({ asset: symbol, timestamp: c.timestamp });
         continue;
@@ -99,7 +108,10 @@ export function computeWac(input: WacInput): EngineResult {
       const decimals = decimalsBySymbol[symbol] ?? 18;
       const decimalsAdj = BigInt(10) ** BigInt(decimals);
       const sellAmount = BigInt(c.assetOut.amount);
-      const priceMicro = BigInt(Math.round(c.assetOut.priceUsd * 1_000_000));
+      // Use assetIn price when available (underlying received on vault withdraw);
+      // fall back to assetOut price for non-vault disposals.
+      const priceUsd = c.assetIn?.priceUsd ?? c.assetOut.priceUsd;
+      const priceMicro = BigInt(Math.round(priceUsd * 1_000_000));
       const take = sellAmount < cur.amount ? sellAmount : cur.amount;
       // Compute consumed cost basis in a single bigint step to avoid
       // losing precision to integer truncation. costBasisConsumedMicro is
@@ -120,7 +132,7 @@ export function computeWac(input: WacInput): EngineResult {
         gainMicroUsd: gainMicro,
         sourceHash: c.hash,
         lotSourceHash: cur.lastSourceHash,
-        disposalPriceUsd: c.assetOut.priceUsd,
+        disposalPriceUsd: priceUsd,
         lotPriceUsd,
         timestamp: c.timestamp,
       });
@@ -131,13 +143,14 @@ export function computeWac(input: WacInput): EngineResult {
         priceGaps.push({ asset: symbol, timestamp: c.timestamp });
       }
 
-      state.set(symbol, {
+      state.set(key, {
         amount: remainingAmount,
         costBasisMicroUsd: remainingCost,
         decimals: cur.decimals,
         lastPriceUsd: cur.lastPriceUsd,
         lastTimestamp: cur.lastTimestamp,
         lastSourceHash: cur.lastSourceHash,
+        vaultAddress: cur.vaultAddress,
       });
       continue;
     }
@@ -153,18 +166,26 @@ export function computeWac(input: WacInput): EngineResult {
 
   // Convert the WAC state map into the AssetLot[] shape EngineResult expects,
   // so callers (orchestrator) can render the remaining inventory uniformly.
+  // Fully-consumed pools (s.amount === 0n) emit an empty array so the key
+  // is present in the map — matches FIFO/LIFO behavior where consumed
+  // queues remain as `[]` and lets callers uniformly check for emptiness.
   const remainingLots: Map<string, AssetLot[]> = new Map();
-  for (const [symbol, s] of state) {
-    if (s.amount === 0n) continue;
-    remainingLots.set(symbol, [
+  for (const [key, s] of state) {
+    if (s.amount === 0n) {
+      remainingLots.set(key, []);
+      continue;
+    }
+    // key is lotKey(symbol, vaultAddress) — extract symbol for the Map value.
+    remainingLots.set(key, [
       {
         amount: s.amount,
         costBasisMicroUsd: s.costBasisMicroUsd,
-        symbol,
+        symbol: key.includes(':') ? key.split(':')[1]! : key,
         decimals: s.decimals,
         timestamp: s.lastTimestamp,
         sourceHash: s.lastSourceHash,
         source: 'rule', // provenance is lost under WAC; default to 'rule'
+        ...(s.vaultAddress !== undefined ? { vaultAddress: s.vaultAddress } : {}),
       },
     ]);
   }
