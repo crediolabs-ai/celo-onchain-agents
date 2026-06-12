@@ -1,0 +1,11 @@
+{
+  "agent": "agent-06",
+  "purpose": "ERC-8004 registration + onchain log emitter",
+  "network": "alfajores",
+  "chainId": 44787,
+  "address": "0x0F5d112fBE6320E2C249326C62a69d87aF436CAb",
+  "generatedAt": "2026-06-08T19:46:15.778Z",
+  "fundingRequired": "0.5 CELO",
+  "fundingStatus": "pending — Quan to fund",
+  "privateKeyLocation": "to be set in .env (AGENT_WALLET_PRIVATE_KEY) at scaffold time; .env will be gitignored"
+}

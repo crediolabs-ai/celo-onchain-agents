@@ -1,0 +1,22 @@
+# Secrets
+.env
+.env.local
+.env.*.local
+
+# Generated
+.cache/
+dist/
+node_modules/
+*.tsbuildinfo
+
+# Editor
+.vscode/
+.idea/
+.DS_Store
+
+# Wallet artifacts (private key live in .env; this dir holds non-secret metadata only)
+# wallets/*.json IS committed — addresses are public. Never put private keys here.
+
+# Coverage
+coverage/
+.nyc_output/
