@@ -356,7 +356,7 @@ export const ClassifiedTxSchema = z.object({
   timestamp: z.number().int().positive(),
   assetIn: AssetLegSchema.optional(),
   assetOut: AssetLegSchema.optional(),
-  classifierSource: z.enum(['rule', 'llm', 'flagged']),
+  classifierSource: z.enum(['rule', 'rule-protocol', 'llm', 'flagged']),
   confidence: z.number().min(0).max(1).optional(),
   aggregatedFromHashes: z.array(TxHashSchema).optional(),
   notes: z.string().optional(),

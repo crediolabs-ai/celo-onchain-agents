@@ -159,7 +159,7 @@ function buildSelectorMap(): Map<string, { protocol: ProtocolName; action: Proto
   return map;
 }
 
-const SELECTOR_MAP = buildSelectorMap();
+export const SELECTOR_MAP = buildSelectorMap();
 
 // ─── Public API ─────────────────────────────────────────────────────────────
 

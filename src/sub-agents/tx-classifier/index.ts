@@ -59,7 +59,7 @@ import {
 import { findMatchingRule } from './rules.js';
 import { llmClassifyTx, type LlmFallbackDeps } from './llm-fallback.js';
 import type { PredicateContext } from './predicates.js';
-import { decodeProtocolAction } from './protocol-decoder.js';
+import { decodeProtocolAction, SELECTOR_MAP } from './protocol-decoder.js';
 import { protocolActionToTxType } from './protocol-actions.js';
 
 // ─── Public surface ────────────────────────────────────────────────────────
@@ -234,12 +234,22 @@ export async function classifyWithDeps(
     //      category-specific type; unmatched selectors with non-empty
     //      input fall through as INTERACTION with the raw selector in
     //      notes (so the user sees the unknown call site).
-    const selectorHit = classifyBySelector(tx, ctx);
-    if (selectorHit) {
-      classified.push(selectorHit.tx);
-      interactionBreakdown[selectorHit.breakdownKey] =
-        (interactionBreakdown[selectorHit.breakdownKey] ?? 0) + 1;
-      continue;
+    //
+    // Guard: if the selector is in the protocol-decoder's SELECTOR_MAP,
+    // skip the selector-registry path so the decoder (step 2.7) can handle
+    // it. This avoids the case where a selector in both maps (e.g.
+    // 0x4e71d92d = GoodDollar claim) is captured by the generic
+    // selector-registry path as INTERACTION before the specific
+    // GOODDOLLAR:CLAIM_YIELD decoding can run.
+    const selector = extractSelector(tx.input);
+    if (!selector || !SELECTOR_MAP.has(selector)) {
+      const selectorHit = classifyBySelector(tx, ctx);
+      if (selectorHit) {
+        classified.push(selectorHit.tx);
+        interactionBreakdown[selectorHit.breakdownKey] =
+          (interactionBreakdown[selectorHit.breakdownKey] ?? 0) + 1;
+        continue;
+      }
     }
 
     // 2.7. Protocol-decoder path (Agent 06 Phase A): decode protocol semantics
