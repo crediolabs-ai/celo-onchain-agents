@@ -524,9 +524,7 @@ export function lookupSelector(selector: string): SelectorEntry | undefined {
  *
  * Note: contract-creation txs (tx.to === null) get the selector from their
  * input too — those are <constructor> in the registry, classified as DEPLOY.
+ *
+ * Implementation lives in the shared `extract-selector.ts` util.
  */
-export function extractSelector(input: string): `0x${string}` | null {
-  if (!input || input === '0x' || input.length < 10) return null;
-  if (!input.startsWith('0x')) return null;
-  return input.slice(0, 10).toLowerCase() as `0x${string}`;
-}
+export { extractSelector } from './extract-selector.js';

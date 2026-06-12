@@ -24,7 +24,7 @@
  */
 
 import type { RawTx, TokenTransfer } from '../../shared/types.js';
-import { lookupSelector } from '../../shared/selector-registry.js';
+import { extractSelector, lookupSelector } from '../../shared/selector-registry.js';
 import {
   ProtocolName,
   ProtocolActionType,
@@ -232,12 +232,6 @@ export function decodeProtocolAction(
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
-
-function extractSelector(input: string): string | null {
-  if (!input || input === '0x' || input.length < 10) return null;
-  if (!input.startsWith('0x')) return null;
-  return input.slice(0, 10).toLowerCase();
-}
 
 function isKnownProtocolAddress(addr: string, protocol: ProtocolName): boolean {
   switch (protocol) {

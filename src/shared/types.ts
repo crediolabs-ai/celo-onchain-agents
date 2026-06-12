@@ -15,6 +15,12 @@
 
 import { z } from 'zod';
 
+// ─── Classifier shared constants ────────────────────────────────────────────
+
+/** Single source of truth for classifier source values. Shared by TS types and Zod schemas. */
+export const CLASSIFIER_SOURCES = ['rule', 'rule-protocol', 'llm', 'flagged'] as const;
+export type ClassifierSource = typeof CLASSIFIER_SOURCES[number];
+
 // ─── Primitives ─────────────────────────────────────────────────────────────
 
 /** EIP-55 checksummed 0x-prefixed EVM address (20 bytes). */
@@ -149,7 +155,7 @@ export interface ClassifiedTx {
   timestamp: Timestamp;
   assetIn?: AssetLeg;
   assetOut?: AssetLeg;
-  classifierSource: 'rule' | 'rule-protocol' | 'llm' | 'flagged';
+  classifierSource: ClassifierSource;
   /**
    * LLM confidence in [0, 1]. Only meaningful when classifierSource === 'llm'.
    * Addition #1 (Tuan, 2026-06-08).
@@ -356,7 +362,7 @@ export const ClassifiedTxSchema = z.object({
   timestamp: z.number().int().positive(),
   assetIn: AssetLegSchema.optional(),
   assetOut: AssetLegSchema.optional(),
-  classifierSource: z.enum(['rule', 'rule-protocol', 'llm', 'flagged']),
+  classifierSource: z.enum(CLASSIFIER_SOURCES),
   confidence: z.number().min(0).max(1).optional(),
   aggregatedFromHashes: z.array(TxHashSchema).optional(),
   notes: z.string().optional(),
