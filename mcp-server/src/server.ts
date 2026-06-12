@@ -393,9 +393,15 @@ async function handleRequest(req: JsonRpcRequest): Promise<JsonRpcResponse | nul
       }
       try {
         const result = await handler(args ?? {});
+        // Honor tool-handler error envelopes (e.g. { error: 'INVALID_INPUT', ... })
+        // by surfacing isError=true so MCP-aware clients render them as errors,
+        // not as successful results with an error message in the body.
+        const isHandlerError = Boolean(
+          result && typeof result === 'object' && 'error' in (result as Record<string, unknown>),
+        );
         return ok(req.id!, {
           content: [{ type: 'text', text: JSON.stringify(result) }],
-          isError: false,
+          isError: isHandlerError,
         });
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);

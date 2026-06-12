@@ -105,13 +105,12 @@ export async function fetchCoinGeckoMarketChart(
   const headers: Record<string, string> = {};
   if (apiKey) headers['x-cg-pro-api-key'] = apiKey;
 
-  try {
-    const data = (await fetchWithRetry<{ prices?: [number, number][] }>(url, {
-      retries: 3,
-      headers,
-    })) as { prices?: [number, number][] };
-    return { prices: data.prices ?? [] };
-  } catch {
-    return { prices: [] };
-  }
+  // Let fetch errors propagate to the caller, which records them in
+  // the tool's `gaps[]` array. Previously this caught and returned
+  // { prices: [] }, which surfaced as silent all-null series.
+  const data = (await fetchWithRetry<{ prices?: [number, number][] }>(url, {
+    retries: 3,
+    headers,
+  })) as { prices?: [number, number][] };
+  return { prices: data.prices ?? [] };
 }
