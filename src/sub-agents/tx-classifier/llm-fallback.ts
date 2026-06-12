@@ -122,7 +122,7 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
       },
       classifierSource: {
         type: 'string',
-        enum: ['rule', 'llm', 'flagged'],
+        enum: ['rule', 'rule-protocol', 'llm', 'flagged'],
         description: 'Always "llm" from this fallback.',
       },
       confidence: {
