@@ -18,6 +18,8 @@
 
 import { z } from 'zod';
 
+import { fetchWithRetry, sleep } from '../lib/http.js';
+
 // ─── Input schema ─────────────────────────────────────────────────────────────
 
 const InputSchema = z.object({
@@ -54,29 +56,6 @@ interface CeloscanTx {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const CHAIN_IDS = { mainnet: 42220, alfajores: 44787 } as const;
-
-async function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-async function fetchWithRetry<T>(url: string, retries = 3): Promise<T> {
-  let lastErr: unknown;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const res = await fetch(url);
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-      }
-      return res.json() as T;
-    } catch (err) {
-      lastErr = err;
-      if (attempt < retries) {
-        await sleep(500 * 2 ** attempt);
-      }
-    }
-  }
-  throw lastErr;
-}
 
 // ─── Main tool handler ────────────────────────────────────────────────────────
 

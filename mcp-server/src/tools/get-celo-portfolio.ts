@@ -20,6 +20,9 @@ import { createPublicClient, http, formatEther, getAddress } from 'viem';
 import { celo, celoAlfajores } from 'viem/chains';
 import { z } from 'zod';
 
+import { COINGECKO_IDS, fetchCoinGeckoPrices } from '../lib/coingecko.js';
+import { fetchWithRetry } from '../lib/http.js';
+
 // ─── Known Celo native tokens ─────────────────────────────────────────────────
 
 interface TokenDef {
@@ -41,15 +44,6 @@ const NATIVE_TOKENS: TokenDef[] = [
 /** Tokens that are NOT native CELO — skip them in the ERC-20 multicall (CELO has its own native path). */
 const ERC20_TOKENS = NATIVE_TOKENS.filter((t) => t.symbol !== 'CELO');
 
-const COINGECKO_IDS: Record<string, string> = {
-  CELO: 'celo',
-  'cUSD': 'celo-dollar',
-  'cEUR': 'celo-euro',
-  'cREAL': 'celo-real-creal',
-  USDC: 'usd-coin',
-  USDT: 'tether',
-};
-
 // ─── Input schema ─────────────────────────────────────────────────────────────
 
 const InputSchema = z.object({
@@ -58,63 +52,6 @@ const InputSchema = z.object({
 });
 
 type Input = z.infer<typeof InputSchema>;
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/** Simple fetch with 3 retries and exponential backoff. */
-async function fetchWithRetry<T>(url: string, retries = 3): Promise<T> {
-  let lastErr: unknown;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const res = await fetch(url);
-      if (!res.ok && res.status !== 200) {
-        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-      }
-      return res.json() as T;
-    } catch (err) {
-      lastErr = err;
-      if (attempt < retries) {
-        await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
-      }
-    }
-  }
-  throw lastErr;
-}
-
-/** Fetch CoinGecko spot prices for an array of symbols. Returns map of symbol → USD price. */
-async function fetchCoinGeckoPrices(
-  symbols: string[],
-  apiKey: string,
-): Promise<Record<string, number>> {
-  const ids = symbols
-    .map((s) => COINGECKO_IDS[s])
-    .filter((id): id is string => id !== undefined);
-
-  if (ids.length === 0) return {};
-
-  const base = apiKey ? 'https://pro-api.coingecko.com/api/v3' : 'https://api.coingecko.com/api/v3';
-  const url = `${base}/simple/price?ids=${ids.join(',')}&vs_currencies=usd`;
-  const headers: Record<string, string> = {};
-  if (apiKey) headers['x-cg-pro-api-key'] = apiKey;
-
-  try {
-    const data = (await fetchWithRetry<Record<string, { usd?: number }>>(
-      url,
-      3,
-    )) as Record<string, { usd?: number }>;
-    const result: Record<string, number> = {};
-    for (const [id, price] of Object.entries(data)) {
-      if (price.usd !== undefined) {
-        const symbol = Object.entries(COINGECKO_IDS).find(([, v]) => v === id)?.[0];
-        if (symbol) result[symbol] = price.usd;
-      }
-    }
-    return result;
-  } catch {
-    // CoinGecko failure — return empty map, portfolio will have null USD values
-    return {};
-  }
-}
 
 // ─── ERC-20 balance fetch via multicall ──────────────────────────────────────
 
