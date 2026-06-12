@@ -325,4 +325,94 @@ describe('decodeProtocolAction', () => {
     });
     expect(decodeProtocolAction(tx, [])).toBeNull();
   });
+
+  // ── ERC-4626 vault (Phase D Wave 1) ──────────────────────────────────
+
+  const UNTANGLED_USDY_VAULT = '0x2a68c98bd43aa24331396f29166aef2bfd51343f';
+
+  it('0x6e553f65 on vault address → ERC4626 DEPOSIT', () => {
+    const tx = makeRawTx({
+      to: UNTANGLED_USDY_VAULT,
+      input: '0x6e553f65' + '00'.repeat(64), // deposit(uint256,address)
+    });
+    const result = decodeProtocolAction(tx, []);
+    expect(result).toMatchObject({
+      protocol: ProtocolName.ERC4626,
+      action: ProtocolActionType.DEPOSIT,
+      confidence: 0.9,
+    });
+  });
+
+  it('0x94bf804d on vault address → ERC4626 DEPOSIT', () => {
+    const tx = makeRawTx({
+      to: UNTANGLED_USDY_VAULT,
+      input: '0x94bf804d' + '00'.repeat(64), // mint(uint256,address)
+    });
+    const result = decodeProtocolAction(tx, []);
+    expect(result).toMatchObject({
+      protocol: ProtocolName.ERC4626,
+      action: ProtocolActionType.DEPOSIT,
+      confidence: 0.9,
+    });
+  });
+
+  it('0xb460af94 on vault address → ERC4626 WITHDRAW', () => {
+    const tx = makeRawTx({
+      to: UNTANGLED_USDY_VAULT,
+      input: '0xb460af94' + '00'.repeat(64), // withdraw(uint256,address,address)
+    });
+    const result = decodeProtocolAction(tx, []);
+    expect(result).toMatchObject({
+      protocol: ProtocolName.ERC4626,
+      action: ProtocolActionType.WITHDRAW,
+      confidence: 0.9,
+    });
+  });
+
+  it('0xba087652 on vault address → ERC4626 WITHDRAW', () => {
+    const tx = makeRawTx({
+      to: UNTANGLED_USDY_VAULT,
+      input: '0xba087652' + '00'.repeat(64), // redeem(uint256,address,address)
+    });
+    const result = decodeProtocolAction(tx, []);
+    expect(result).toMatchObject({
+      protocol: ProtocolName.ERC4626,
+      action: ProtocolActionType.WITHDRAW,
+      confidence: 0.9,
+    });
+  });
+
+  it('ERC4626 selector on wrong address returns null (false-positive guard)', () => {
+    const tx = makeRawTx({
+      to: ('0x' + 'ff'.repeat(20)) as Address,
+      input: '0x6e553f65' + '00'.repeat(64), // deposit selector, wrong address
+    });
+    expect(decodeProtocolAction(tx, [])).toBeNull();
+  });
+
+  // Collision: 0xba087652 is also Moola cToken redeem. Moola address must
+  // still route to MOOLA (address gate is mandatory — regression test).
+  it('0xba087652 on Moola cToken → MOOLA WITHDRAW (collision, Moola wins)', () => {
+    const MOOLA_CTOKEN = '0x43d067F76154E7620555673F8c6D8C8E51F3f7D4';
+    const tx = makeRawTx({
+      to: MOOLA_CTOKEN,
+      input: '0xba087652' + '00'.repeat(64), // redeem selector
+    });
+    const result = decodeProtocolAction(tx, []);
+    expect(result).toMatchObject({
+      protocol: ProtocolName.MOOLA,
+      action: ProtocolActionType.WITHDRAW,
+      confidence: 0.9,
+    });
+  });
+
+  it('0xba087652 on unknown address → null (new address-mandatory behavior)', () => {
+    const tx = makeRawTx({
+      to: ('0x' + 'aa'.repeat(20)) as Address,
+      input: '0xba087652' + '00'.repeat(64), // redeem selector, non-vault, non-Moola
+    });
+    // Without an address gate, this generic selector would false-positive as
+    // MOOLA or ERC4626. The address gate now correctly returns null.
+    expect(decodeProtocolAction(tx, [])).toBeNull();
+  });
 });

@@ -13,6 +13,7 @@ export enum ProtocolName {
   UBESWAP = 'UBESWAP',
   MOOLA = 'MOOLA',
   GOODDOLLAR = 'GOODDOLLAR',
+  ERC4626 = 'ERC4626',
 }
 
 /** Top-level actions decoded per protocol. */
@@ -67,6 +68,12 @@ export function protocolActionToTxType(
       switch (action) {
         case ProtocolActionType.CLAIM_YIELD: return 'YIELD';
         default:                             return 'INTERACTION';
+      }
+    case ProtocolName.ERC4626:
+      switch (action) {
+        case ProtocolActionType.DEPOSIT:  return 'YIELD';
+        case ProtocolActionType.WITHDRAW: return 'YIELD';
+        default:                          return 'INTERACTION';
       }
   }
 }

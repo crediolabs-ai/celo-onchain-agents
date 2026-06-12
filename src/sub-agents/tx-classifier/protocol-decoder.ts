@@ -11,6 +11,7 @@
  *   - UBESWAP (V2 Router)       — SWAP
  *   - MOOLA   (cToken markets)  — MINT, BURN, DEPOSIT, WITHDRAW, CLAIM_YIELD
  *   - GOODDOLLAR                — CLAIM_YIELD
+ *   - ERC-4626 vault (any registered address) — DEPOSIT, WITHDRAW
  *
  * Confidence bands:
  *   0.9  — exact function selector match (known router function)
@@ -51,6 +52,14 @@ const GOODDOLLAR_RESERVE = '0x94A3240f484A04F5e3d524f528d02694c109463b'.toLowerC
 const GOODDOLLAR_CLAIMERS = new Set<string>([
   '0x43d72ff17701b2da814620735c39c620ce0ea4a1',
 ].map((a) => a.toLowerCase()));
+
+// Untangled USDy vault (ERC-4626) — verified on-chain 2026-06-12.
+// Source: eth_call on 0x2a68c98bd43aa24331396f29166aef2bfd51343f;
+// name()=USDy, symbol()=USDy, decimals()=6, asset()=0xcebA9300… (USDC bridged).
+const UNTANGLED_USDY_VAULT = '0x2a68c98bd43aa24331396f29166aef2bfd51343f'.toLowerCase();
+
+/** Registered ERC-4626 vault addresses. Extend with more entries as needed. */
+const ERC4626_VAULTS = new Set<string>([UNTANGLED_USDY_VAULT]);
 
 // ─── Selector index for fast lookup ────────────────────────────────────────
 
@@ -155,6 +164,30 @@ const SELECTOR_TABLE: readonly SelectorEntry[] = [
     ],
     functionName: 'claim/claimTokens',
   },
+
+  // ── ERC-4626 VAULT ─────────────────────────────────────────────────────
+  // NOTE: 0xba087652 (redeem) collides with MOOLA cToken redeem. The
+  // address gate in isKnownProtocolAddress() is MANDATORY — on a Moola
+  // cToken address the selector routes to MOOLA; on a registered vault
+  // address it routes to ERC4626. Both paths are correct.
+  {
+    protocol: ProtocolName.ERC4626,
+    action: ProtocolActionType.DEPOSIT,
+    selectors: [
+      '0x6e553f65', // deposit(uint256,address)
+      '0x94bf804d', // mint(uint256,address)
+    ],
+    functionName: 'deposit/mint',
+  },
+  {
+    protocol: ProtocolName.ERC4626,
+    action: ProtocolActionType.WITHDRAW,
+    selectors: [
+      '0xb460af94', // withdraw(uint256,address,address)
+      '0xba087652', // redeem(uint256,address,address)
+    ],
+    functionName: 'withdraw/redeem',
+  },
 ];
 
 /** Build a selector → (protocol, action, fnName) lookup map. */
@@ -200,6 +233,16 @@ export function decodeProtocolAction(
       // this gate, those false positives poison the classifier and
       // downstream CSV reports (which then price a USDT transfer as if
       // it were a GoodDollar G$ claim → $0 NGN totals).
+      //
+      // COLLISION: 0xba087652 is registered for BOTH ERC4626 redeem and
+      // MOOLA redeem. When the selector maps to ERC4626 but the address is
+      // a Moola cToken, Moola wins (Moola was here first historically).
+      // Likewise, if the selector were registered for MOOLA first and the
+      // address were a vault, ERC4626 would win — each protocol's address
+      // gate is the tiebreaker.
+      if (hit.protocol === ProtocolName.ERC4626 && isMoolaCToken(toLower)) {
+        return { protocol: ProtocolName.MOOLA, action: ProtocolActionType.WITHDRAW, confidence: 0.9, functionName: 'redeem' };
+      }
       if (!isKnownProtocolAddress(toLower, hit.protocol)) return null;
       return {
         protocol: hit.protocol,
@@ -256,6 +299,8 @@ function isKnownProtocolAddress(addr: string, protocol: ProtocolName): boolean {
       return isMoolaCToken(addr);
     case ProtocolName.GOODDOLLAR:
       return addr === GOODDOLLAR_RESERVE || GOODDOLLAR_CLAIMERS.has(addr);
+    case ProtocolName.ERC4626:
+      return isERC4626Vault(addr);
   }
 }
 
@@ -263,6 +308,10 @@ function isMoolaCToken(addr: string): boolean {
   // Covers cUSD and cEUR cTokens (on-chain from demo wallet traces).
   // Add more as they appear in traces.
   return addr === MOOLA_CTOKEN_CUSD || addr === MOOLA_CTOKEN_CEUR;
+}
+
+function isERC4626Vault(addr: string): boolean {
+  return ERC4626_VAULTS.has(addr);
 }
 
 /** Map global selector-registry category + address to a protocol action. */

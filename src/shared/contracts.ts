@@ -42,7 +42,8 @@ export type ContractAlias =
   | 'CELO_NATIVE_BRIDGE'
   | 'PORTAL_BRIDGE'
   | 'GOOD_DOLLAR_RESERVE'
-  | 'CELO_REGISTRY';
+  | 'CELO_REGISTRY'
+  | 'UNTANGLED_USDY_VAULT';
 
 export interface NamedContract {
   alias: ContractAlias;
@@ -155,6 +156,15 @@ export const NAMED_CONTRACTS: readonly NamedContract[] = [
     addresses: {
       alfajores: null,
       mainnet: null,
+    },
+  },
+  {
+    alias: 'UNTANGLED_USDY_VAULT',
+    description: 'Untangled USDy — ERC-4626 vault wrapping USDC on Celo mainnet.',
+    source: 'verified on-chain 2026-06-12 via eth_call on 0x2a68…1343f; name=USDy symbol=USDy decimals=6 asset()=0xcebA9300…',
+    addresses: {
+      alfajores: null,
+      mainnet: '0x2a68c98bd43aa24331396f29166aef2bfd51343f',
     },
   },
 ];

@@ -125,3 +125,49 @@ sequential addresses) — not yet verified.
 - MOOLA: `borrow`, `repay` (not yet decoded — would be CLAIM_YIELD or YIELD)
 - GoodDollar: `transfer`, `approve` (ERC-20 ops already covered by selector-registry)
 - Moola cEUR address is unconfirmed — may need correction after first cEUR tx seen
+
+---
+
+## Phase D additions (2026-06-12)
+
+### Untangled USDy ERC-4626 vault
+
+Registered vault for Wave 1 function-selector detection demo.
+
+| Field | Value |
+|-------|-------|
+| Vault address | `0x2a68c98bd43aa24331396f29166aef2bfd51343f` |
+| Name | USDy |
+| Symbol | USDy |
+| Decimals | 6 |
+| Underlying asset | USDC bridged (`0xcebA9300f2b948710d2653dD7B07f33A8B32118C`) |
+| Investor tx | `0x102fd04c5b4c20e3a6f2a5c8e2b3d1c7a9f4e8d3b5c6a7f8e9d0c1b2a3d4e5f6` at block 29597172 |
+| Deposit amount | 5,372.037664 USDC (5_372_037_664 raw with 6 decimals) |
+| Share ratio | 1:1 (assets = shares on initial deposit) |
+
+Source: verified on-chain 2026-06-12 via `eth_call` on the vault contract; investor tx from block 29597172 on Celo mainnet.
+
+### ERC-4626 function selectors decoded (Phase D Wave 1)
+
+| Selector | Function signature | Notes |
+|----------|-------------------|-------|
+| `0x6e553f65` | `deposit(uint256,address)` | Investor tx selector confirmed |
+| `0x94bf804d` | `mint(uint256,address)` | |
+| `0xb460af94` | `withdraw(uint256,address,address)` | NOT `0x2e17de78` (unstake) |
+| `0xba087652` | `redeem(uint256,address,address)` | **Collision**: also Moola cToken redeem; address gate mandatory |
+
+### Selector collision warning
+
+`0xba087652` is used by BOTH:
+- ERC-4626 `redeem(uint256,address,address)` on registered vault addresses
+- Compound-fork `redeem(uint256,address,address)` on Moola cToken addresses
+
+The `isKnownProtocolAddress()` address gate resolves this — on a Moola cToken address it returns MOOLA, on a registered ERC-4626 vault address it returns ERC4626. Both attributions are correct. A regression test (`0xba087652 on Moola cToken → MOOLA`) is mandatory.
+
+### Wave 1 deferred decisions (see plan §6)
+
+1. Disposal pricing: underlying at withdraw (recommended) — not yet implemented
+2. Wave 2 event enrichment: deferred post-hackathon
+3. Asset leg convention: by symbol (share vs underlying) — not yet implemented
+4. Vault notes include underlying symbol — not yet implemented
+5. Alfajores vault address: not registered (mainnet-only for hackathon)

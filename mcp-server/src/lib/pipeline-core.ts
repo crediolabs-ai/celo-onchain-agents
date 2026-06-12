@@ -19,6 +19,7 @@ export const DEFAULT_DECIMALS: Record<string, number> = {
 const UBESWAP_ROUTER = '0xE3D8bd6Aed4F159bc8000a9cD47CffDb95F96121';
 const MENTO_BROKER = '0x777A8255cA72412f0d706dc03C9D1987306B4CaD';
 const MENTO_ROUTER = '0x4861840C2EfB2b98312B0aE34d86fD73E8f9B6f6';
+const UNTANGLED_USDY_VAULT = '0x2a68c98bd43aa24331396f29166aef2bfd51343f';
 
 // ─── Shared types ────────────────────────────────────────────────────────────
 
@@ -105,6 +106,7 @@ function evaluatePredicate(p: Predicate, ctx: PredicateContext): boolean {
         ubeswap_v2_router: UBESWAP_ROUTER.toLowerCase(),
         mento_broker: MENTO_BROKER.toLowerCase(),
         mento_router: MENTO_ROUTER.toLowerCase(),
+        untangled_usdy_vault: UNTANGLED_USDY_VAULT.toLowerCase(),
       };
       return p.refs.some(r => addrMap[r.toLowerCase()] === lower);
     }
@@ -172,6 +174,15 @@ const RULES: Rule[] = [
     { kind: 'nativeDirection', is: 'in' }, { kind: 'valueLt', amount: '1000000000000000000' },
     { kind: 'isError', is: false }] },
     classify: 'YIELD', confidence: 0.88 },
+  // YIELD: ERC-4626 vault deposit (deposit/mint selectors on registered vault address)
+  // NOTE: MCP pipeline has no protocol-decoder; address gate is mandatory.
+  // The hasMethod predicate matches tx.methodName (set by Celoscan/nodestring).
+  // For the full selector-level classification use the monorepo classifier.
+  { id: 'yield.erc4626@v1', matches: { kind: 'allOf', children: [
+    { kind: 'toIn', refs: ['UNTANGLED_USDY_VAULT'] },
+    { kind: 'hasMethod', method: 'deposit' },
+    { kind: 'isError', is: false }] },
+    classify: 'YIELD', confidence: 0.9 },
   // GAS: self-send
   { id: 'gas.self@v1', matches: { kind: 'allOf', children: [
     { kind: 'nativeDirection', is: 'self' }, { kind: 'isError', is: false }] },
