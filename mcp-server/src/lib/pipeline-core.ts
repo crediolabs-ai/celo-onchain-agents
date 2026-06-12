@@ -69,6 +69,8 @@ export interface ClassifyAndComputeTaxResult {
   priceGaps: PriceGap[]; disposalsCount: number;
   methodJurisdictionCompat: { method: string; jurisdiction: string;
     ok: boolean; reason?: string }[];
+  classified: ClassifiedTx[];
+  disposals: Disposal[];
 }
 
 // ─── Predicate DSL ───────────────────────────────────────────────────────────
@@ -373,6 +375,8 @@ export function classifyAndComputeTax(
     perAsset,
     priceGaps: fifoResult.priceGaps,
     disposalsCount: fifoResult.disposals.length,
+    classified,
+    disposals: fifoResult.disposals,
     methodJurisdictionCompat: [
       { method: 'FIFO', jurisdiction, ok: true },
       { method: 'LIFO', jurisdiction, ok: jurisdiction !== 'NG',

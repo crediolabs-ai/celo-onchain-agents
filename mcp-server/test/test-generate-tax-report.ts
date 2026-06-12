@@ -10,7 +10,7 @@
 import 'dotenv/config';
 import { spawn } from 'child_process';
 
-const DEMO_ADDRESS = '0x4678ed7b5747c8d033849a6a26ff6b3b1c25c25';
+const DEMO_ADDRESS = '0x46788b60daf46448668c7abaeea4ac8745451c25';
 const TAX_YEAR = 2025;
 
 function skip(reason: string): void {
@@ -22,76 +22,90 @@ if (!process.env.CELOSCAN_API_KEY) {
   skip('CELOSCAN_API_KEY not set — skipping live test');
 }
 
-const cp = spawn('npx', ['tsx', '-r', 'dotenv/config', '-'], {
+const cp = spawn('npx', ['tsx', 'src/server.ts'], {
   cwd: new URL('..', import.meta.url),
   stdio: ['pipe', 'pipe', 'pipe'],
   env: { ...process.env },
 });
 
-interface JsonRpcRequest {
-  jsonrpc: '2.0';
-  id: number;
-  method: string;
-  params?: Record<string, unknown>;
+const stdoutBuffer: string[] = [];
+
+cp.stdout.on('data', (d: Buffer) => stdoutBuffer.push(d.toString()));
+cp.stderr.on('data', (d: Buffer) => {
+  console.error('[server]', d.toString('utf-8').trim());
+});
+
+let idCounter = 1;
+
+function jsonRequest(method: string, params: object = {}): string {
+  return JSON.stringify({ jsonrpc: '2.0', id: idCounter++, method, params }) + '\n';
 }
 
-interface JsonRpcResponse {
-  jsonrpc: '2.0';
-  id: number;
-  result?: { content?: { text: string }[] };
-  error?: { code: number; message: string };
+async function sendRaw(req: string): Promise<void> {
+  cp.stdin?.write(req + '\n');
 }
 
-let id = 1;
-const pending = new Map<number, (r: JsonRpcResponse) => void>();
-
-cp.stdout.on('data', (buf: Buffer) => {
-  const lines = buf.toString('utf-8').trim().split('\n');
-  for (const line of lines) {
-    if (!line.trim()) continue;
+function tryParseNextJson(): Record<string, unknown> | null {
+  const combined = stdoutBuffer.join('');
+  const lines = combined.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!.trim();
+    if (!line) continue;
     try {
-      const res = JSON.parse(line) as JsonRpcResponse;
-      const resolve = pending.get(res.id);
-      if (resolve) { pending.delete(res.id); resolve(res); }
-    } catch { /* ignore parse errors */ }
+      const parsed = JSON.parse(line);
+      if (parsed && typeof parsed === 'object') {
+        lines.splice(i, 1);
+        stdoutBuffer.splice(0, stdoutBuffer.length, lines.join('\n'));
+        return parsed as Record<string, unknown>;
+      }
+    } catch { /* not a JSON line */ }
   }
-});
+  return null;
+}
 
-cp.stderr.on('data', (buf: Buffer) => {
-  console.error('[server]', buf.toString('utf-8').trim());
-});
-
-function send(method: string, params: Record<string, unknown> = {}): Promise<JsonRpcResponse> {
-  return new Promise((resolve) => {
-    const req: JsonRpcRequest = { jsonrpc: '2.0', id: id++, method, params };
-    pending.set(req.id, resolve);
-    cp.stdin.write(JSON.stringify(req) + '\n');
-  });
+async function recvJson(timeoutMs = 10000): Promise<Record<string, unknown> | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = tryParseNextJson();
+    if (result) return result;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  return null;
 }
 
 async function toolsCall(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const res = await send('tools/call', { name, arguments: args });
-  if (!res.result?.content?.[0]) throw new Error('No content in response');
-  return JSON.parse(res.result.content[0].text);
+  await sendRaw(jsonRequest('tools/call', { name, arguments: args }));
+  const res = await recvJson(20000);
+  if (!res?.result?.content?.[0]) throw new Error(`No content for ${name}`);
+  return JSON.parse(res.result.content[0].text as string);
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────────────────
 
 async function run(): Promise<void> {
+  // Wait for server startup
+  await new Promise<void>((r) => setTimeout(r, 4000));
+
+  if (cp.exitCode !== null) {
+    console.error('Server exited early with code:', cp.exitCode);
+    process.exit(1);
+  }
+
   // Init
-  await send('initialize', {
+  await sendRaw(jsonRequest('initialize', {
     protocolVersion: '2024-11-05',
     capabilities: { tools: {} },
     clientInfo: { name: 'test-generate-tax-report', version: '0.1.0' },
-  });
-  await send('notifications/initialized');
+  }));
+  await recvJson(6000);
+  await sendRaw(jsonRequest('notifications/initialized', {}));
 
   console.log('\n=== generate_tax_report integration test ===');
   console.log(`Wallet: ${DEMO_ADDRESS}`);
-  console.log(`Tax year: ${TAX_YEAR}`);
+  console.log(`Tax year: ${TAX_YEAR}\n`);
 
   // ── NG FIFO ────────────────────────────────────────────────────────────────
-  console.log('\n[Test 1] NG FIFO + format=both...');
+  console.log('[Test 1] NG FIFO + format=both...');
   const ngResult = await toolsCall('generate_tax_report', {
     address: DEMO_ADDRESS,
     taxYear: TAX_YEAR,
@@ -101,19 +115,19 @@ async function run(): Promise<void> {
   }) as Record<string, unknown>;
 
   if ('error' in ngResult) {
-    console.error('[FAIL] NG result returned error:', ngResult.error);
+    console.error('[FAIL] NG result returned error:', ngResult.error, (ngResult as { message?: string }).message);
     process.exit(1);
   }
 
   console.log(`  schema:      ${ngResult.schema}`);
-  console.log(`  rowCount:    ${ngResult.rowCount}`);
-  console.log(`  filename:    ${ngResult.filename}`);
-  console.log(`  has csv:     ${Boolean(ngResult.csv)}`);
+  console.log(`  rowCount:   ${ngResult.rowCount}`);
+  console.log(`  filename:   ${ngResult.filename}`);
+  console.log(`  has csv:    ${Boolean(ngResult.csv)}`);
   console.log(`  has csvBase64: ${Boolean(ngResult.csvBase64)}`);
-  console.log(`  has report:  ${Boolean(ngResult.report)}`);
+  console.log(`  has report: ${Boolean(ngResult.report)}`);
   console.log(`  has summary: ${Boolean(ngResult.summary)}`);
-  console.log(`  has taxDue:  ${Boolean(ngResult.taxDue)}`);
-  console.log(`  disclaimer:  ${String(ngResult.disclaimer ?? '').slice(0, 60)}…`);
+  console.log(`  has taxDue: ${Boolean(ngResult.taxDue)}`);
+  console.log(`  disclaimer: ${String(ngResult.disclaimer ?? '').slice(0, 60)}…`);
 
   if (typeof ngResult.csv !== 'string' || !ngResult.csv.length) {
     console.error('[FAIL] csv is empty');
@@ -148,6 +162,10 @@ async function run(): Promise<void> {
     outputFormat: 'csv',
   }) as Record<string, unknown>;
 
+  if ('error' in keResult) {
+    console.error('[FAIL] KE result returned error:', keResult.error);
+    process.exit(1);
+  }
   console.log(`  schema:   ${keResult.schema}`);
   console.log(`  rowCount: ${keResult.rowCount}`);
   if (typeof keResult.csv !== 'string' || !keResult.csv.includes('dat_due_kes')) {
@@ -166,6 +184,10 @@ async function run(): Promise<void> {
     outputFormat: 'csv',
   }) as Record<string, unknown>;
 
+  if ('error' in otherResult) {
+    console.error('[FAIL] OTHER result returned error:', otherResult.error);
+    process.exit(1);
+  }
   console.log(`  schema: ${otherResult.schema}`);
   if (typeof otherResult.csv !== 'string' || !otherResult.csv.includes('reporting_period')) {
     console.error('[FAIL] OTHER CSV missing reporting_period column');

@@ -27,6 +27,11 @@ import 'dotenv/config';
 
 import { getCeloPortfolio } from './tools/get-celo-portfolio.js';
 import { getCeloTransactionHistory } from './tools/get-celo-transaction-history.js';
+import { getTokenPriceHistory } from './tools/get-token-price-history.js';
+import { calculateTaxLiability } from './tools/calculate-tax-liability.js';
+import { getStakingRewards } from './tools/get-staking-rewards.js';
+import { generateTaxReport } from './tools/generate-tax-report.js';
+import { getCarfReport } from './tools/get-carf-report.js';
 
 // ─── Logging (stderr only — stdout is the protocol channel) ──────────────────
 
@@ -57,6 +62,11 @@ interface ToolDescription {
 const TOOL_HANDLERS: Record<string, ToolHandler> = {
   get_celo_portfolio: getCeloPortfolio,
   get_celo_transaction_history: getCeloTransactionHistory,
+  get_token_price_history: getTokenPriceHistory,
+  calculate_tax_liability: calculateTaxLiability,
+  get_staking_rewards: getStakingRewards,
+  generate_tax_report: generateTaxReport,
+  get_carf_report: getCarfReport,
 };
 
 const TOOL_DESCRIPTIONS: Record<string, ToolDescription> = {
@@ -106,6 +116,188 @@ const TOOL_DESCRIPTIONS: Record<string, ToolDescription> = {
         },
       },
       required: ['address'],
+    },
+  },
+  get_token_price_history: {
+    description:
+      'Returns historical USD price series for Celo native tokens (CELO, cUSD, cEUR, cREAL, USDC, USDT) over a date range. Uses CoinGecko market_chart/range endpoint (1 API call per token). Gaps in data are returned as null prices.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tokens: {
+          type: 'array',
+          items: { type: 'string', enum: ['CELO', 'cUSD', 'cEUR', 'cREAL', 'USDC', 'USDT'] },
+          description: 'Celo token symbols to fetch (default: all 6 native tokens)',
+        },
+        fromDate: {
+          type: 'string',
+          pattern: '^\\d{4}-\\d{2}-\\d{2}$',
+          description: 'Start date YYYY-MM-DD (inclusive, UTC)',
+        },
+        toDate: {
+          type: 'string',
+          pattern: '^\\d{4}-\\d{2}-\\d{2}$',
+          description: 'End date YYYY-MM-DD (inclusive, UTC)',
+        },
+        interval: {
+          type: 'string',
+          enum: ['daily'],
+          default: 'daily',
+          description: 'Price granularity (daily only)',
+        },
+      },
+      required: ['fromDate', 'toDate'],
+    },
+  },
+  calculate_tax_liability: {
+    description:
+      'Computes realized capital gains, income, yield, and tax owed for a Celo wallet over a tax year in the given jurisdiction (NG/KE/OTHER). Runs fetch → classify (rule-only) → price → FIFO PNL → tax rules pipeline.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        address: {
+          type: 'string',
+          pattern: '^0x[0-9a-fA-F]{40}$',
+          description: 'Celo wallet address (0x... 40 hex characters)',
+        },
+        network: {
+          type: 'string',
+          enum: ['mainnet', 'alfajores'],
+          default: 'mainnet',
+          description: 'Celo network to query',
+        },
+        taxYear: {
+          type: 'number',
+          description: 'Tax year (integer, 2020–2030)',
+        },
+        jurisdiction: {
+          type: 'string',
+          enum: ['NG', 'KE', 'OTHER'],
+          default: 'NG',
+          description: 'Tax jurisdiction',
+        },
+        method: {
+          type: 'string',
+          enum: ['FIFO', 'LIFO', 'WAC'],
+          default: 'FIFO',
+          description: 'Cost-basis method',
+        },
+        fromBlock: {
+          type: 'number',
+          description: 'Optional block-range start',
+        },
+        toBlock: {
+          type: 'number',
+          description: 'Optional block-range end',
+        },
+      },
+      required: ['address', 'taxYear'],
+    },
+  },
+  get_staking_rewards: {
+    description:
+      'Returns Celo validator/epoch staking rewards for an address. Uses transfer-heuristic (v1): groups of ≥2 identical-amount CELO transfers from the same sender within ≤7 days are flagged as staking rewards. Upgrade to eth_getLogs path when EpochRewards address is populated.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        address: {
+          type: 'string',
+          pattern: '^0x[0-9a-fA-F]{40}$',
+          description: 'Celo wallet address (0x... 40 hex characters)',
+        },
+        network: {
+          type: 'string',
+          enum: ['mainnet', 'alfajores'],
+          default: 'mainnet',
+          description: 'Celo network to query',
+        },
+        fromTimestamp: {
+          type: 'number',
+          description: 'Unix timestamp start (inclusive, optional)',
+        },
+        toTimestamp: {
+          type: 'number',
+          description: 'Unix timestamp end (inclusive, optional)',
+        },
+      },
+      required: ['address'],
+    },
+  },
+  generate_tax_report: {
+    description:
+      'Composes a full tax report for a Celo wallet + tax year in the requested jurisdiction CSV format (NG/KE/OTHER). Returns CSV as string + base64, plus structured summary and tax due. Internally calls calculate_tax_liability and re-runs the pipeline to generate CSV rows.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        address: {
+          type: 'string',
+          pattern: '^0x[0-9a-fA-F]{40}$',
+          description: 'Celo wallet address (0x... 40 hex characters)',
+        },
+        network: {
+          type: 'string',
+          enum: ['mainnet', 'alfajores'],
+          default: 'mainnet',
+          description: 'Celo network to query',
+        },
+        taxYear: {
+          type: 'number',
+          description: 'Tax year (integer, 2020–2030)',
+        },
+        jurisdiction: {
+          type: 'string',
+          enum: ['NG', 'KE', 'OTHER'],
+          default: 'NG',
+          description: 'Tax jurisdiction (NG=nigeria-firs, KE=kenya-kra, OTHER=oecd-carf)',
+        },
+        method: {
+          type: 'string',
+          enum: ['FIFO', 'LIFO', 'WAC'],
+          default: 'FIFO',
+          description: 'Cost-basis method',
+        },
+        outputFormat: {
+          type: 'string',
+          enum: ['json', 'csv', 'both'],
+          default: 'both',
+          description: 'Output format',
+        },
+      },
+      required: ['address', 'taxYear'],
+    },
+  },
+  get_carf_report: {
+    description:
+      'Returns an OECD CARF (Crypto-Asset Reporting Framework) report for a Celo wallet over a date range. Multi-year support, userJurisdiction metadata (ISO 3166-1 alpha-2), CARF metadata block. Use for cross-jurisdiction tax reporting and CARF compliance.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        address: {
+          type: 'string',
+          pattern: '^0x[0-9a-fA-F]{40}$',
+          description: 'Celo wallet address (0x... 40 hex characters)',
+        },
+        network: {
+          type: 'string',
+          enum: ['mainnet', 'alfajores'],
+          default: 'mainnet',
+          description: 'Celo network to query',
+        },
+        fromYear: {
+          type: 'number',
+          description: 'Start year (integer, 2020–2030)',
+        },
+        toYear: {
+          type: 'number',
+          description: 'End year (integer, 2020–2030)',
+        },
+        userJurisdiction: {
+          type: 'string',
+          pattern: '^[A-Z]{2}$',
+          description: 'ISO 3166-1 alpha-2 country code (e.g. NG, KE, DE)',
+        },
+      },
+      required: ['address', 'fromYear', 'toYear', 'userJurisdiction'],
     },
   },
 };
