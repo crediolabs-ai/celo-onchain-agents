@@ -15,9 +15,10 @@ export const DEFAULT_DECIMALS: Record<string, number> = {
   CELO: 18, cUSD: 18, cEUR: 18, cREAL: 18, USDC: 6, USDT: 6,
 };
 
-const UBESWAP_ROUTER = '0x6索29e8Ae8aT96D4d381A86b8E8C4dC6e5b7d8F'; // placeholder; real addr in contracts.ts
-const MENTO_BROKER = '0x937b2449dCD4D4Da5CBBc08f9D6fA45e8B3D3d3d';
-const MENTO_ROUTER = '0x977645143B09b0D0d2d03D3D6d44f3Da8C7e9e9';
+// Real Celo mainnet addresses — keep in sync with src/shared/contracts.ts NAMED_CONTRACTS
+const UBESWAP_ROUTER = '0xE3D8bd6Aed4F159bc8000a9cD47CffDb95F96121';
+const MENTO_BROKER = '0x777A8255cA72412f0d706dc03C9D1987306B4CaD';
+const MENTO_ROUTER = '0x4861840C2EfB2b98312B0aE34d86fD73E8f9B6f6';
 
 // ─── Shared types ────────────────────────────────────────────────────────────
 
