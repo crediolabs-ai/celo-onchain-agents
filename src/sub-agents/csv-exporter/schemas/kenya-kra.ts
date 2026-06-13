@@ -102,9 +102,10 @@ export function buildKenyaKraRows(
         : 0;
 
     // Income value for income-type events (market value on receipt).
+    // B5 fix: was using only priceUsd (per-unit); must multiply by full amount.
     const incomeKes =
       label === 'income' && assetIn?.priceUsd !== undefined
-        ? Math.round(assetIn.priceUsd * KES_PER_USD * 100) / 100
+        ? Math.round(parseFloat(assetIn.amount) * assetIn.priceUsd * KES_PER_USD * 100) / 100
         : 0;
 
     rows.push({

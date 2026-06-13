@@ -458,9 +458,16 @@ describe('Kenya KRA schema', () => {
     expect(rows[0]!.dat_due_kes).toBe(0);
   });
 
-  it('income_kes = market value for income events', () => {
-    const rows = buildKenyaKraRows([INCOME_TX]);
-    // priceUsd 0.6 × 153 = 91.8
+  it('B5: income_kes = full amount × priceUsd × KES rate (not per-unit)', () => {
+    // 1 CELO × 0.6 USD × 153 KES/USD = 91.8 KES
+    const incomeTxHuman: ClassifiedTx = {
+      hash: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      type: 'INCOME',
+      timestamp: 1_704_067_200,
+      assetIn: { symbol: 'CELO', amount: '1', priceUsd: 0.6 },
+      classifierSource: 'rule',
+    };
+    const rows = buildKenyaKraRows([incomeTxHuman]);
     expect(rows[0]!.income_kes).toBe(91.8);
   });
 
