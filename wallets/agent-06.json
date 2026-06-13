@@ -1,11 +1,21 @@
 {
   "agent": "agent-06",
-  "purpose": "ERC-8004 registration + onchain log emitter",
-  "network": "alfajores",
-  "chainId": 44787,
-  "address": "0x0F5d112fBE6320E2C249326C62a69d87aF436CAb",
-  "generatedAt": "2026-06-08T19:46:15.778Z",
-  "fundingRequired": "0.5 CELO",
-  "fundingStatus": "pending — Quan to fund",
-  "privateKeyLocation": "to be set in .env (AGENT_WALLET_PRIVATE_KEY) at scaffold time; .env will be gitignored"
+  "purpose": "onchain log emitter for --emit-onchain-log (Track 2: Most Onchain Activity). ERC-8004 registration was performed from operator wallet 0x46788b60daf46448668c7abaeea4ac8745451c25 (tx 0x0fad789eb78d6500ae09eec1c1295ce654cd9277a25289d1cf55de36b8b961a1).",
+  "network": "celo-mainnet",
+  "chainId": 42220,
+  "address": "0xb302195497B820DCE5852FCB618408549fb62e96",
+  "generatedAt": "2026-06-13T18:47:25.003Z",
+  "fundedAt": "2026-06-13T18:50:00.000Z",
+  "initialFunding": "10.0 CELO",
+  "fundingStatus": "funded — 6 emits verified on chain, 9.97 CELO remaining",
+  "emitsVerified": 6,
+  "privateKeyLocation": ".env → AGENT_WALLET_PRIVATE_KEY (gitignored, NOT in this file)",
+  "knownEmitTxHashes": [
+    "0xdbe3376b3475c8d2d1a4921cef9786d3f476d20f1073688c9ad1e3b81dd3cb18",
+    "0xad4ddd2bb1798fe0a07c18008692ca8ec6deb17ef08cf73d0e60d30e0f6757c1",
+    "0xf870702e36ad0c00a9053c91fd7f71c1d78e6f29584d8e9ee3df4f69d839aab1",
+    "0x82205151dfd587ad82e6a23c57348a5078092ad533366d3786a96a97b2c96697",
+    "0x07b0793608f23dec48b28f175ecfb6c46c2d5c4bbbddc69d348a7b32bd235a29",
+    "0xd9f50b22af705db14c7b87999125604bc04b17de7fe1e6594734124e855fcdfb"
+  ]
 }

@@ -1,0 +1,9 @@
+tx_date,type,asset,amount,price_kes,gross_transfer_value_kes,dat_due_kes,income_kes,notes
+2024-05-13,other,UNKNOWN,0,0.00,0.00,0.00,0.00,""
+2024-05-13,transfer,UNKNOWN,0,0.00,0.00,0.00,0.00,""
+2024-05-13,other,UNKNOWN,0,0.00,0.00,0.00,0.00,"Function selector: approve(address,uint256) (ERC-20 approval)"
+2024-05-13,other,KarmenMezz_JOT,5000000000,0.00,0.00,0.00,0.00,"Protocol-aware: TransparentUpgradeableProxy (UNKNOWN)"
+2024-12-13,other,UNKNOWN,0,0.00,0.00,0.00,0.00,"Function selector: approve(address,uint256) (ERC-20 approval)"
+2024-12-13,other,UNKNOWN,5000000000,0.00,0.00,0.00,0.00,"v2: add a token-direction predicate (analogous to nativeDirection) to lift to 0.95. (rule: transfer.simple_token_in@v1@0.85)"
+2024-12-31,other,UNKNOWN,0,0.00,0.00,0.00,0.00,"Function selector: approve(address,uint256) (ERC-20 approval)"
+2024-12-31,income,USDyc,5374900000,130.00,0.00,0.00,698737000000.00,"ERC4626:DEPOSIT (deposit/mint)"
