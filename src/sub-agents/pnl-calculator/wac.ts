@@ -49,6 +49,8 @@ export function computeWac(input: WacInput): EngineResult {
   const realizedPnlMicroUsdByAsset: Record<string, bigint> = {};
   let incomeMicroUsdTotal = 0n;
   let yieldMicroUsdTotal = 0n;
+  const incomeMicroUsdByYear: Record<number, bigint> = {};
+  const yieldMicroUsdByYear: Record<number, bigint> = {};
   let gasMicroUsdTotal = 0n;
   const priceGaps: { asset: string; timestamp: Timestamp }[] = [];
 
@@ -91,8 +93,16 @@ export function computeWac(input: WacInput): EngineResult {
           vaultAddress: cur.vaultAddress,
         });
       }
-      if (c.type === 'INCOME') incomeMicroUsdTotal += costMicro;
-      if (c.type === 'YIELD') yieldMicroUsdTotal += costMicro;
+      if (c.type === 'INCOME') {
+        incomeMicroUsdTotal += costMicro;
+        const y = new Date(c.timestamp * 1000).getUTCFullYear();
+        incomeMicroUsdByYear[y] = (incomeMicroUsdByYear[y] ?? 0n) + costMicro;
+      }
+      if (c.type === 'YIELD') {
+        yieldMicroUsdTotal += costMicro;
+        const y = new Date(c.timestamp * 1000).getUTCFullYear();
+        yieldMicroUsdByYear[y] = (yieldMicroUsdByYear[y] ?? 0n) + costMicro;
+      }
       continue;
     }
 
@@ -196,6 +206,8 @@ export function computeWac(input: WacInput): EngineResult {
     realizedPnlMicroUsdByAsset,
     incomeMicroUsdTotal,
     yieldMicroUsdTotal,
+    incomeMicroUsdByYear,
+    yieldMicroUsdByYear,
     gasMicroUsdTotal,
     priceGaps,
   };

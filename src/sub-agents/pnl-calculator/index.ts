@@ -114,13 +114,19 @@ function computeUnrealized(
   return {};
 }
 
-/** Bucket income/yield/gain/gas into the requested tax year. */
+/** Bucket income/yield/gain/gas into per-calendar-year summaries.
+ *
+ *  Income and yield are now tracked per-year inside the engine (see
+ *  `incomeMicroUsdByYear` / `yieldMicroUsdByYear` on `EngineResult`), so a
+ *  2024 deposit is credited to the 2024 summary, not the user's currently-
+ *  requested year. Gas and realized gains remain engine-wide placeholders
+ *  (gas micro-USD is not threaded through `ClassifiedTx` yet; the gain
+ *  per-disposal year-bucketing below is still in place).
+ */
 function bucketByYear(
   engine: EngineResult,
   taxYear: number,
 ): TaxYearSummary[] {
-  // Hackathon scope: bucket everything into the single requested taxYear.
-  // Post-hackathon: walk each disposal's timestamp and bucket per calendar year.
   const totalsByYear: Record<number, TaxYearSummary> = {};
 
   const ensure = (year: number): TaxYearSummary => {
@@ -143,14 +149,26 @@ function bucketByYear(
     summary.realizedGains += Number(d.gainMicroUsd) / 1_000_000;
   }
 
-  // Income + yield totals are engine-wide, not per-year. We apportion by
-  // the proportion of each type's txs that landed in the requested year.
-  // Simple v1: put everything in taxYear, zero elsewhere.
-  const target = ensure(taxYear);
-  target.income = Number(engine.incomeMicroUsdTotal) / 1_000_000;
-  target.yield = Number(engine.yieldMicroUsdTotal) / 1_000_000;
-  target.deductibleGas = Number(engine.gasMicroUsdTotal) / 1_000_000;
-  target.taxableIncome = target.income + target.realizedGains - target.deductibleGas;
+  // Income + yield: walk the per-year maps the engine populated. The
+  // requested `taxYear` summary is always present (even if zero) so the
+  // CLI summary line is never missing.
+  for (const [yearStr, microUsd] of Object.entries(engine.incomeMicroUsdByYear)) {
+    const year = Number(yearStr);
+    const summary = ensure(year);
+    summary.income += Number(microUsd) / 1_000_000;
+  }
+  for (const [yearStr, microUsd] of Object.entries(engine.yieldMicroUsdByYear)) {
+    const year = Number(yearStr);
+    const summary = ensure(year);
+    summary.yield += Number(microUsd) / 1_000_000;
+  }
+  const requested = ensure(taxYear);
+  // Gas is engine-wide (still a placeholder — see TODO in fifo.ts:160).
+  requested.deductibleGas = Number(engine.gasMicroUsdTotal) / 1_000_000;
+  for (const summary of Object.values(totalsByYear)) {
+    summary.taxableIncome =
+      summary.income + summary.realizedGains - summary.deductibleGas;
+  }
 
   return Object.values(totalsByYear).sort((a, b) => a.year - b.year);
 }

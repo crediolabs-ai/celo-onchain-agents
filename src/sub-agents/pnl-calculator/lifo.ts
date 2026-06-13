@@ -37,6 +37,8 @@ export function computeLifo(input: LifoInput): EngineResult {
   const realizedPnlMicroUsdByAsset: Record<string, bigint> = {};
   let incomeMicroUsdTotal = 0n;
   let yieldMicroUsdTotal = 0n;
+  const incomeMicroUsdByYear: Record<number, bigint> = {};
+  const yieldMicroUsdByYear: Record<number, bigint> = {};
   let gasMicroUsdTotal = 0n;
   const priceGaps: { asset: string; timestamp: Timestamp }[] = [];
 
@@ -58,8 +60,16 @@ export function computeLifo(input: LifoInput): EngineResult {
       const queue = lots.get(lotKey(symbol, vaultAddress)) ?? [];
       queue.push(lot);
       lots.set(lotKey(symbol, vaultAddress), queue);
-      if (c.type === 'INCOME') incomeMicroUsdTotal += lot.costBasisMicroUsd;
-      if (c.type === 'YIELD') yieldMicroUsdTotal += lot.costBasisMicroUsd;
+      if (c.type === 'INCOME') {
+        incomeMicroUsdTotal += lot.costBasisMicroUsd;
+        const y = new Date(c.timestamp * 1000).getUTCFullYear();
+        incomeMicroUsdByYear[y] = (incomeMicroUsdByYear[y] ?? 0n) + lot.costBasisMicroUsd;
+      }
+      if (c.type === 'YIELD') {
+        yieldMicroUsdTotal += lot.costBasisMicroUsd;
+        const y = new Date(c.timestamp * 1000).getUTCFullYear();
+        yieldMicroUsdByYear[y] = (yieldMicroUsdByYear[y] ?? 0n) + lot.costBasisMicroUsd;
+      }
       continue;
     }
 
@@ -130,6 +140,8 @@ export function computeLifo(input: LifoInput): EngineResult {
     realizedPnlMicroUsdByAsset,
     incomeMicroUsdTotal,
     yieldMicroUsdTotal,
+    incomeMicroUsdByYear,
+    yieldMicroUsdByYear,
     gasMicroUsdTotal,
     priceGaps,
   };

@@ -68,6 +68,17 @@ export interface EngineResult {
   incomeMicroUsdTotal: bigint;
   /** Total yield across all YIELD events, in micro-USD. */
   yieldMicroUsdTotal: bigint;
+  /**
+   * Income totals bucketed by the calendar year of each event's timestamp,
+   * in micro-USD. Used by the year summary so that a 2024 deposit is
+   * credited to the 2024 tax year, not the user's currently-requested
+   * year. (Previous behavior put all engine-wide totals in the requested
+   * year regardless of when the events actually happened — see
+   * pnl-calculator/index.ts bucketByYear for the consumer.)
+   */
+  incomeMicroUsdByYear: Record<number, bigint>;
+  /** Yield totals bucketed by calendar year, in micro-USD. */
+  yieldMicroUsdByYear: Record<number, bigint>;
   /** Total gas cost across all GAS events, in micro-USD. */
   gasMicroUsdTotal: bigint;
   /** Asset/timestamp pairs where no historical price was available. */
@@ -83,8 +94,19 @@ export const DEFAULT_DECIMALS: Record<string, number> = {
   USDC: 6,
   USDT: 6,
   G$: 18, // GoodDollar
-  USDy: 6, // Untangled USDy — ERC-4626 vault share wrapping USDC (verified on-chain 2026-06-12)
+  USDyc: 6, // Untangled USDyc — ERC-4626 vault share wrapping USDC (on-chain symbol()="USDYc" verified 2026-06-13)
 };
+
+/** Share token symbols for known ERC-4626 vaults. Engine uses this to
+ *  disambiguate YIELD-with-both-legs (vault DEPOSIT vs WITHDRAW):
+ *   - If `assetIn.symbol` is in this set, the user RECEIVED shares → DEPOSIT
+ *     (acquire share lot).
+ *   - If `assetOut.symbol` is in this set, the user SURRENDERED shares →
+ *     WITHDRAW (consume share lot).
+ *  TODO post-hackathon: source from the registered-vault registry (e.g. on-chain
+ *  `symbol()` call) instead of a hardcoded set; only one vault is registered
+ *  today so a constant suffices. */
+const VAULT_SHARE_SYMBOLS: ReadonlySet<string> = new Set(['USDyc']);
 
 /** USD price per whole token (1.0 CELO), given a lot's real-micro-USD cost basis. */
 export function lotPricePerUnitUsd(lot: {
@@ -139,16 +161,28 @@ export function lotFromAcquisition(
 
 /** Whether a classified tx is an acquisition event (adds to the lot queue).
  *
- *  YIELD-with-assetOut (vault withdraw: shares surrendered, underlying received)
- *  is treated as a disposal, NOT an acquisition — see isLotConsumption(). The
- *  exclusion here prevents isAcquisition from short-circuiting the iteration
- *  and creating a phantom lot for the incoming underlying.
+ *  Vault deposits (YIELD + vaultAddress + assetIn=share) are acquisitions.
+ *  Vault withdrawals (YIELD + vaultAddress + assetIn=underlying) are
+ *  consumptions — see isLotConsumption(). The vault share symbol
+ *  (VAULT_SHARE_SYMBOLS) is the discriminator: which leg is the share?
+ *
+ *  YIELD-without-vaultAddress and assetIn-only (no assetOut) is a legacy
+ *  staking-reward / claim pattern — counts as an acquisition toward
+ *  yieldMicroUsdTotal. The previous rule excluded ALL YIELD+assetOut from
+ *  acquisition (the B1 fix), which was over-broad: deposits were lumped
+ *  with withdrawals and never credited the share lot.
  */
 export function isAcquisition(c: ClassifiedTx): boolean {
+  if (c.type === 'YIELD' && c.vaultAddress !== undefined && c.assetIn !== undefined) {
+    // Vault DEPOSIT: received shares (assetIn.symbol is the share symbol).
+    if (VAULT_SHARE_SYMBOLS.has(c.assetIn.symbol)) return true;
+    // Vault WITHDRAW (assetIn is the underlying) — fall through to the
+    // consumption branch.
+    return false;
+  }
   return (
     (c.type === 'TRANSFER_IN' || c.type === 'INCOME' || c.type === 'YIELD') &&
-    c.assetIn !== undefined &&
-    !(c.type === 'YIELD' && c.assetOut !== undefined)
+    c.assetIn !== undefined
   );
 }
 
@@ -159,15 +193,22 @@ export function isDisposal(c: ClassifiedTx): boolean {
 
 /** Whether a classified tx consumes from the lot queue (disposal-like).
  *
- *  Extends isDisposal() to also fire for YIELD-with-assetOut — the vault
- *  withdraw pattern (surrender shares, receive underlying). Staking-reward
- *  YIELD (assetIn only) still goes through the acquisition branch.
- *
- *  Use as: `if (isLotConsumption(c)) { ... walk queue, emit Disposal ... }`.
+ *  Extends isDisposal() to also fire for YIELD-with-assetOut — both the
+ *  vault WITHDRAW pattern (assetIn=underlying, assetOut=shares; surrender
+ *  share, receive underlying) and the legacy YIELD-with-assetOut-only edge
+ *  case (no assetIn at all). When assetIn IS the share, the YIELD is a
+ *  DEPOSIT and the disposal branch is skipped — see isAcquisition() for
+ *  the symmetric rule.
  */
 export function isLotConsumption(c: ClassifiedTx): boolean {
   if (c.type === 'TRANSFER_OUT' || c.type === 'SWAP') return c.assetOut !== undefined;
-  if (c.type === 'YIELD') return c.assetOut !== undefined;
+  if (c.type === 'YIELD') {
+    if (c.vaultAddress !== undefined && c.assetIn !== undefined) {
+      // Vault DEPOSIT (assetIn is the share) → not a consumption.
+      if (VAULT_SHARE_SYMBOLS.has(c.assetIn.symbol)) return false;
+    }
+    return c.assetOut !== undefined;
+  }
   return false;
 }
 
