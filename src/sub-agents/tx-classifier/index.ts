@@ -37,8 +37,10 @@
 import {
   ClassifiedTxSchema,
   type Address,
+  type AssetLeg,
   type ClassifiedTx,
   type ClassifyOutput,
+  type ContractMetadata,
   type FetchedTxData,
   type TokenTransfer,
   type Jurisdiction,
@@ -346,7 +348,7 @@ export async function classifyWithDeps(
   // downstream FIFO / LIFO / NL-query / CSV exporter reading
   // asset=UNKNOWN and amount=0, which collapsed every year summary to
   // $0.00 even when the classifier correctly identified income events.
-  enrichClassifiedWithAssetLegs(validated, transfersByHash, fetched.address);
+  enrichClassifiedWithAssetLegs(validated, transfersByHash, fetched.address, fetched.contractMetadata);
 
   return {
     classified: validated,
@@ -369,13 +371,24 @@ export async function classifyWithDeps(
  *                  stage downstream.
  *   - `assetOut` = token sent (from == address). Used by TRANSFER_OUT and
  *                  the sell-side of SWAP.
+ *
+ * Fix #7 (2026-06-13): when the token symbol looks like a contract name
+ * (contains `_`, has digits, or length > 10), also populate `assetName`
+ * from `contractMetadata` so CSV export has a human-readable fallback.
  */
 function enrichClassifiedWithAssetLegs(
   classified: readonly ClassifiedTx[],
   transfersByHash: ReadonlyMap<string, readonly TokenTransfer[]>,
   address: string,
+  contractMetadata: ReadonlyMap<Address, ContractMetadata>,
 ): void {
   const addrLower = address.toLowerCase();
+
+  /** True when `sym` looks like a Solidity contract name rather than a token symbol. */
+  function looksLikeContractName(sym: string): boolean {
+    return sym.includes('_') || /\d/.test(sym) || sym.length > 10;
+  }
+
   for (const cls of classified) {
     const txTransfers = transfersByHash.get(cls.hash);
     if (!txTransfers || txTransfers.length === 0) continue;
@@ -396,7 +409,7 @@ function enrichClassifiedWithAssetLegs(
         } catch { /* keep current on parse error */ }
       }
       if (incoming) {
-        cls.assetIn = {
+        const leg: AssetLeg = {
           symbol: incoming.tokenSymbol,
           // Preserve the raw base-unit (wei) integer string — downstream
           // PNL stages call `BigInt(amount)` and will throw on any decimal
@@ -405,6 +418,11 @@ function enrichClassifiedWithAssetLegs(
           amount: incoming.value,
           priceUsd: 0,
         };
+        if (looksLikeContractName(incoming.tokenSymbol)) {
+          const meta = contractMetadata.get(incoming.contractAddress.toLowerCase() as Address);
+          if (meta?.name) leg.assetName = meta.name;
+        }
+        cls.assetIn = leg;
       }
     }
     if (!cls.assetOut) {
@@ -417,11 +435,16 @@ function enrichClassifiedWithAssetLegs(
         } catch { /* keep current on parse error */ }
       }
       if (outgoing) {
-        cls.assetOut = {
+        const leg: AssetLeg = {
           symbol: outgoing.tokenSymbol,
           amount: outgoing.value,
           priceUsd: 0,
         };
+        if (looksLikeContractName(outgoing.tokenSymbol)) {
+          const meta = contractMetadata.get(outgoing.contractAddress.toLowerCase() as Address);
+          if (meta?.name) leg.assetName = meta.name;
+        }
+        cls.assetOut = leg;
       }
     }
   }

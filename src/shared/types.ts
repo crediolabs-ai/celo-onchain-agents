@@ -143,6 +143,13 @@ export interface FetchedTxData {
 /** Asset leg of a classified transaction. */
 export interface AssetLeg {
   symbol: string;
+  /**
+   * Contract name from `getsourcecode` (Celoscan `name` field), populated by
+   * the tx-fetcher when the symbol looks like a contract name rather than a
+   * real token symbol. Used as a fallback label in CSV export when `symbol`
+   * is unavailable or non-informative. Addition #7 (Tuan, 2026-06-13).
+   */
+  assetName?: string;
   /** Decimal string — preserve full precision, format at the edge. */
   amount: string;
   priceUsd: number;
@@ -346,6 +353,7 @@ const TxHashSchema = literal<TxHash>(/^0x[a-fA-F0-9]{64}$/);
 
 const AssetLegSchema = z.object({
   symbol: z.string(),
+  assetName: z.string().optional(),
   amount: z.string(), // decimal string — preserve precision
   priceUsd: z.number().nonnegative(),
 });

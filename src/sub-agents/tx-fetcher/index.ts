@@ -109,25 +109,38 @@ export async function fetchTxs(
   const startblock = 0;
   const endblock = 99_999_999;
 
-  // Run the three endpoint paginations. Errors are collected, not thrown.
-  const [normalResult, tokenResult, internalResult] = await Promise.allSettled([
-    paginateNormalTxs({ client, endpoint: 'txlist', address: request.address, startblock, endblock, sort: 'asc' }),
-    paginateTokenTxs({ client, endpoint: 'tokentx', address: request.address, startblock, endblock, sort: 'asc' }),
-    paginateInternalTxs({ client, endpoint: 'txlistinternal', address: request.address, startblock, endblock, sort: 'asc' }),
-  ]);
+  // Run the three endpoint paginations sequentially to avoid hitting Celoscan's
+  // 3-calls/sec rate-limit burst. When all three endpoints were fired in
+  // parallel via Promise.allSettled, page 1 of all three + page 2 of all three
+  // = 6 calls in <2s, which exceeded the rate limit and triggered retry
+  // backoff (1.2s/retry × up to 3 retries = 3.6s wasted per page).
+  // Sequential execution costs more wall-clock time but eliminates rate-limit
+  // hits entirely. Fix #8 (2026-06-13).
+  let normalRows: Awaited<ReturnType<typeof paginateNormalTxs>> = [];
+  let tokenRows: Awaited<ReturnType<typeof paginateTokenTxs>> = [];
+  let internalRows: Awaited<ReturnType<typeof paginateInternalTxs>> = [];
 
-  const rawTxns =
-    normalResult.status === 'fulfilled'
-      ? normalResult.value.map(toRawTx)
-      : (collectErr(fetchErrors, 'normal', normalResult.reason), []);
-  const tokenTransfers =
-    tokenResult.status === 'fulfilled'
-      ? tokenResult.value.map(toTokenTransfer)
-      : (collectErr(fetchErrors, 'token', tokenResult.reason), []);
-  const internalTxns =
-    internalResult.status === 'fulfilled'
-      ? internalResult.value.map(toInternalTx)
-      : (collectErr(fetchErrors, 'internal', internalResult.reason), []);
+  try {
+    normalRows = await paginateNormalTxs({ client, endpoint: 'txlist', address: request.address, startblock, endblock, sort: 'asc' });
+  } catch (err) {
+    collectErr(fetchErrors, 'normal', err);
+  }
+
+  try {
+    tokenRows = await paginateTokenTxs({ client, endpoint: 'tokentx', address: request.address, startblock, endblock, sort: 'asc' });
+  } catch (err) {
+    collectErr(fetchErrors, 'token', err);
+  }
+
+  try {
+    internalRows = await paginateInternalTxs({ client, endpoint: 'txlistinternal', address: request.address, startblock, endblock, sort: 'asc' });
+  } catch (err) {
+    collectErr(fetchErrors, 'internal', err);
+  }
+
+  const rawTxns = normalRows.map(toRawTx);
+  const tokenTransfers = tokenRows.map(toTokenTransfer);
+  const internalTxns = internalRows.map(toInternalTx);
 
   const paginationComplete = fetchErrors.length === 0;
 

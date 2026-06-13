@@ -16,13 +16,31 @@
  * Reference: Tax Laws (Amendment) Act 2023; Finance Act 2022; skill last updated 2026-06-07.
  */
 
-import type { ClassifiedTx } from '../../../shared/types.js';
+import type { AssetLeg, ClassifiedTx } from '../../../shared/types.js';
 
-/** KE CBK exchange rate: 1 USD = 153 KES (2024 average). */
-const KES_PER_USD = 153;
+/**
+ * KE CBK exchange rate: 1 USD = KES_PER_USD env var, default 130 (2026 H1 CBK average).
+ * DefiLlama does not list USD/KES — no live oracle fetch available.
+ * Override via KES_PER_USD in .env for current spot rates.
+ */
+const KES_PER_USD = Number(process.env.KES_PER_USD ?? 130);
 
 /** KRA DAT rate: 3% of gross transfer value. */
 const DAT_RATE = 0.03;
+
+/**
+ * Pick the best human-readable label from an AssetLeg.
+ * Fallback chain: symbol || assetName || Token@<first-6-hex-of-tx-hash>
+ * Fix #7: prevents bare contract names (e.g. "KarmenMezz_JOT") from appearing
+ * in CSV when a proper symbol is unavailable.
+ */
+function assetLabel(leg: AssetLeg | undefined, txHash: string): string {
+  if (!leg) return 'UNKNOWN';
+  if (leg.symbol) return leg.symbol;
+  if (leg.assetName) return leg.assetName;
+  const hex = txHash.slice(2, 8).toUpperCase();
+  return `Token@${hex}`;
+}
 
 /**
  * Map our TxType enum to KRA-friendly type labels.
@@ -56,7 +74,7 @@ function kraTypeLabel(tx: ClassifiedTx): string {
 export interface KenyaKraRow {
   tx_date: string;                 // ISO 8601 date (UTC)
   type: string;                   // income | transfer | other
-  asset: string;                   // token symbol
+  asset: string;                   // symbol || assetName || shortened address (Fix #7)
   amount: string;                 // raw decimal string (full precision)
   price_kes: number;              // CBK rate × priceUsd, 2 dp
   gross_transfer_value_kes: number; // full outgoing value for DAT base, 2 dp
@@ -67,6 +85,7 @@ export interface KenyaKraRow {
 
 /**
  * Build KE KRA rows from classified transactions.
+ * Fix #7: asset label uses symbol || assetName || shortenedAddress fallback chain.
  */
 export function buildKenyaKraRows(
   classified: ClassifiedTx[],
@@ -80,7 +99,7 @@ export function buildKenyaKraRows(
 
     if (tx.type === 'GAS') continue; // Gas not deductible under KRA guidance
 
-    const asset = assetIn?.symbol || assetOut?.symbol || 'UNKNOWN';
+    const asset = assetLabel(assetIn, tx.hash) || assetLabel(assetOut, tx.hash) || 'UNKNOWN';
     const amount = assetIn?.amount ?? assetOut?.amount ?? '0';
 
     const priceUsd = assetIn?.priceUsd ?? assetOut?.priceUsd ?? 0;

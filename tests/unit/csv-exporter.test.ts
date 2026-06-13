@@ -194,10 +194,10 @@ describe('Nigeria FIRS schema', () => {
     expect(rows[0]!.type).toBe('other');
   });
 
-  it('converts price to NGN at 1550 rate', () => {
+  it('converts price to NGN at 1500 rate', () => {
     const rows = buildNigeriaFirsRows([INCOME_TX], pnlForNg, 2024);
-    // priceUsd = 0.6 → 0.6 × 1550 = 930
-    expect(rows[0]!.price_ngn).toBe(930);
+    // priceUsd = 0.6 → 0.6 × 1500 = 900
+    expect(rows[0]!.price_ngn).toBe(900);
   });
 
   it('sets cost_basis_ngn from disposal record when available', () => {
@@ -214,8 +214,8 @@ describe('Nigeria FIRS schema', () => {
       { hash: swap.hash, proceedsMicroUsd: 2_500_000n, costBasisMicroUsd: 1_300_000n },
     ]);
     const rows = buildNigeriaFirsRows([swap], pnl, 2024);
-    // cost basis = 1.3e6/1e6 = 1.3 USD → 1.3 × 1550 = 2015 NGN
-    expect(rows[0]!.cost_basis_ngn).toBe(2015);
+    // cost basis = 1.3e6/1e6 = 1.3 USD → 1.3 × 1500 = 1950 NGN
+    expect(rows[0]!.cost_basis_ngn).toBe(1950);
   });
 
   it('B1/B2: cost_basis_ngn uses FIFO cost basis, not market proceeds', () => {
@@ -227,12 +227,12 @@ describe('Nigeria FIRS schema', () => {
       assetOut: { symbol: 'CELO', amount: '1', priceUsd: 0.65 },
       classifierSource: 'rule',
     };
-    // cost basis = 2.0 USD → 2.0 × 1550 = 3100 NGN
+    // cost basis = 2.0 USD → 2.0 × 1500 = 3000 NGN
     const pnl = createPnlWithDisposal([
       { hash: swap.hash, proceedsMicroUsd: 2_500_000n, costBasisMicroUsd: 2_000_000n },
     ]);
     const rows = buildNigeriaFirsRows([swap], pnl, 2024);
-    expect(rows[0]!.cost_basis_ngn).toBe(3100);
+    expect(rows[0]!.cost_basis_ngn).toBe(3000);
   });
 
   it('sets cost_basis_ngn = 0 for income events', () => {
@@ -249,12 +249,12 @@ describe('Nigeria FIRS schema', () => {
       assetOut: { symbol: 'CELO', amount: '1', priceUsd: 0.65 },
       classifierSource: 'rule',
     };
-    // proceeds = 2.5 USD → 3875 NGN; cost basis = 1.3 USD → 2015 NGN; gain = 1860 NGN
+    // proceeds = 2.5 USD → 3750 NGN; cost basis = 1.3 USD → 1950 NGN; gain = 1800 NGN
     const pnl = createPnlWithDisposal([
       { hash: swap.hash, proceedsMicroUsd: 2_500_000n, costBasisMicroUsd: 1_300_000n },
     ]);
     const rows = buildNigeriaFirsRows([swap], pnl, 2024);
-    expect(rows[0]!.gain_loss_ngn).toBe(1860);
+    expect(rows[0]!.gain_loss_ngn).toBe(1800);
   });
 
   it('B1: SWAP gain uses proceeds - FIFO cost basis, not price diff', () => {
@@ -266,12 +266,12 @@ describe('Nigeria FIRS schema', () => {
       assetOut: { symbol: 'CELO', amount: '1', priceUsd: 0.65 },
       classifierSource: 'rule',
     };
-    // proceeds = 2.5 USD → 3875 NGN; cost basis = 2.0 USD → 3100 NGN; gain = 775 NGN
+    // proceeds = 2.5 USD → 3750 NGN; cost basis = 2.0 USD → 3000 NGN; gain = 750 NGN
     const pnl = createPnlWithDisposal([
       { hash: swap.hash, proceedsMicroUsd: 2_500_000n, costBasisMicroUsd: 2_000_000n },
     ]);
     const rows = buildNigeriaFirsRows([swap], pnl, 2024);
-    expect(rows[0]!.gain_loss_ngn).toBe(775);
+    expect(rows[0]!.gain_loss_ngn).toBe(750);
   });
 
   it('computes cumulative gain as running total', () => {
@@ -289,8 +289,8 @@ describe('Nigeria FIRS schema', () => {
     const rows = buildNigeriaFirsRows([INCOME_TX, swap], pnl, 2024);
     // Income: gain 0; cumulative = 0
     expect(rows[0]!.cumulative_gain_ngn).toBe(0);
-    // Swap: gain 1860 NGN; cumulative = 1860 NGN
-    expect(rows[1]!.cumulative_gain_ngn).toBe(1860);
+    // Swap: gain 1800 NGN; cumulative = 1800 NGN
+    expect(rows[1]!.cumulative_gain_ngn).toBe(1800);
   });
 
   it('D2: cumulative_gain_ngn resets at year boundary', () => {
@@ -315,11 +315,11 @@ describe('Nigeria FIRS schema', () => {
       { hash: tx2024.hash, proceedsMicroUsd: 1_000_000n, costBasisMicroUsd: 500_000n },
     ]);
     const rows = buildNigeriaFirsRows([tx2023, tx2024], pnl, 2024);
-    // proceeds = 1.0 USD → 1550 NGN; cost basis = 0.5 USD → 775 NGN; gain = 775 NGN
-    // Row 0 (2023): cumulative = 775 NGN
-    expect(rows[0]!.cumulative_gain_ngn).toBe(775);
-    // Row 1 (2024): year changed → cumulative resets to 0, then adds 775 NGN
-    expect(rows[1]!.cumulative_gain_ngn).toBe(775);
+    // proceeds = 1.0 USD → 1500 NGN; cost basis = 0.5 USD → 750 NGN; gain = 750 NGN
+    // Row 0 (2023): cumulative = 750 NGN
+    expect(rows[0]!.cumulative_gain_ngn).toBe(750);
+    // Row 1 (2024): year changed → cumulative resets to 0, then adds 750 NGN
+    expect(rows[1]!.cumulative_gain_ngn).toBe(750);
   });
 
   it('B2: cost_basis_ngn = FIFO cost basis, not market proceeds for TRANSFER_OUT', () => {
@@ -334,10 +334,10 @@ describe('Nigeria FIRS schema', () => {
       { hash: transferOut.hash, proceedsMicroUsd: 700_000n, costBasisMicroUsd: 400_000n },
     ]);
     const rows = buildNigeriaFirsRows([transferOut], pnl, 2024);
-    // cost basis = 0.4e6/1e6 = 0.4 USD → 0.4 × 1550 = 620 NGN
-    expect(rows[0]!.cost_basis_ngn).toBe(620);
-    // proceeds = 0.7e6/1e6 = 0.7 USD → 0.7 × 1550 = 1085 NGN; gain = 1085 - 620 = 465 NGN
-    expect(rows[0]!.gain_loss_ngn).toBe(465);
+    // cost basis = 0.4e6/1e6 = 0.4 USD → 0.4 × 1500 = 600 NGN
+    expect(rows[0]!.cost_basis_ngn).toBe(600);
+    // proceeds = 0.7e6/1e6 = 0.7 USD → 0.7 × 1500 = 1050 NGN; gain = 1050 - 600 = 450 NGN
+    expect(rows[0]!.gain_loss_ngn).toBe(450);
   });
 
   it('skips GAS txs', () => {
@@ -407,8 +407,8 @@ describe('Kenya KRA schema', () => {
   });
 
   it('B3: gross_transfer_value_kes includes amount × price factor', () => {
-    // B3 fix: 2 CELO × 0.65 USD/CELO × 153 KES/USD = 198.9 KES
-    // DAT = 3% × 198.9 = 5.967 → 5.97 (2dp)
+    // B3 fix: 2 CELO × 0.65 USD/CELO × 130 KES/USD = 169.0 KES
+    // DAT = 3% × 169.0 = 5.07 (2dp)
     // Uses clean fixture with standard token amounts (not wei).
     const swap: ClassifiedTx = {
       hash: '0x0000000000000000000000000000000000000000000000000000000000000b3a',
@@ -419,8 +419,8 @@ describe('Kenya KRA schema', () => {
       classifierSource: 'rule',
     };
     const rows = buildKenyaKraRows([swap]);
-    expect(rows[0]!.gross_transfer_value_kes).toBe(198.9);
-    expect(rows[0]!.dat_due_kes).toBe(5.97);
+    expect(rows[0]!.gross_transfer_value_kes).toBe(169);
+    expect(rows[0]!.dat_due_kes).toBe(5.07);
   });
 
   it('B3: TRANSFER_OUT gross value includes amount factor', () => {
@@ -433,13 +433,13 @@ describe('Kenya KRA schema', () => {
       classifierSource: 'rule',
     };
     const rows = buildKenyaKraRows([transferOut]);
-    // 0.5 × 0.7 × 153 = 53.55 KES; DAT = 3% = 1.61 (2dp)
-    expect(rows[0]!.gross_transfer_value_kes).toBe(53.55);
-    expect(rows[0]!.dat_due_kes).toBe(1.61);
+    // 0.5 × 0.7 × 130 = 45.5 KES; DAT = 3% = 1.37 (2dp)
+    expect(rows[0]!.gross_transfer_value_kes).toBe(45.5);
+    expect(rows[0]!.dat_due_kes).toBe(1.37);
   });
 
   it('B3: DAT uses per-unit price × full amount × KES rate', () => {
-    // 5 CELO × 0.6 USD × 153 = 459 KES gross; DAT = 3% = 13.77 (2dp)
+    // 5 CELO × 0.6 USD × 130 = 390 KES gross; DAT = 3% = 11.7 (2dp)
     const swapTx: ClassifiedTx = {
       hash: '0x0000000000000000000000000000000000000000000000000000000000000abc',
       type: 'SWAP',
@@ -449,8 +449,8 @@ describe('Kenya KRA schema', () => {
       classifierSource: 'rule',
     };
     const rows = buildKenyaKraRows([swapTx]);
-    expect(rows[0]!.gross_transfer_value_kes).toBe(459);
-    expect(rows[0]!.dat_due_kes).toBe(13.77);
+    expect(rows[0]!.gross_transfer_value_kes).toBe(390);
+    expect(rows[0]!.dat_due_kes).toBe(11.7);
   });
 
   it('DAT = 0 for income events', () => {
@@ -459,7 +459,7 @@ describe('Kenya KRA schema', () => {
   });
 
   it('B5: income_kes = full amount × priceUsd × KES rate (not per-unit)', () => {
-    // 1 CELO × 0.6 USD × 153 KES/USD = 91.8 KES
+    // 1 CELO × 0.6 USD × 130 KES/USD = 78 KES
     const incomeTxHuman: ClassifiedTx = {
       hash: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
       type: 'INCOME',
@@ -468,7 +468,7 @@ describe('Kenya KRA schema', () => {
       classifierSource: 'rule',
     };
     const rows = buildKenyaKraRows([incomeTxHuman]);
-    expect(rows[0]!.income_kes).toBe(91.8);
+    expect(rows[0]!.income_kes).toBe(78);
   });
 
   it('income_kes = 0 for transfer events', () => {
@@ -495,10 +495,10 @@ describe('Kenya KRA schema', () => {
     expect(csv).toContain('income_kes');
   });
 
-  it('converts price to KES at 153 rate', () => {
+  it('converts price to KES at 130 rate', () => {
     const rows = buildKenyaKraRows([INCOME_TX]);
-    // 0.6 USD × 153 = 91.8 KES
-    expect(rows[0]!.price_kes).toBe(91.8);
+    // 0.6 USD × 130 = 78 KES
+    expect(rows[0]!.price_kes).toBe(78);
   });
 });
 
@@ -777,5 +777,129 @@ describe('exportCsv dispatcher', () => {
     expect(other.csv).toContain('asset_type');
     expect(other.csv).not.toContain('price_ngn');
     expect(other.csv).not.toContain('dat_due_kes');
+  });
+});
+
+// ─── Fix #7: assetLabel fallback chain regression tests ───────────────────────
+
+describe('assetLabel fallback chain (Fix #7)', () => {
+  // Case (a): symbol wins over assetName
+  it('symbol wins when both symbol and assetName are present (NG)', () => {
+    const tx: ClassifiedTx = {
+      hash: '0xabcd000000000000000000000000000000000000000000000000000000001234',
+      type: 'INCOME',
+      timestamp: 1_704_067_200,
+      assetIn: { symbol: 'cUSD', assetName: 'KarmenMezz_JOT', amount: '1000000000000000000', priceUsd: 1.0 },
+      classifierSource: 'rule',
+    };
+    const rows = buildNigeriaFirsRows([tx], pnlForNg, 2024);
+    expect(rows[0]!.asset).toBe('cUSD');
+  });
+
+  it('symbol wins when both symbol and assetName are present (KE)', () => {
+    const tx: ClassifiedTx = {
+      hash: '0xabcd000000000000000000000000000000000000000000000000000000001234',
+      type: 'INCOME',
+      timestamp: 1_704_067_200,
+      assetIn: { symbol: 'CELO', assetName: 'KarmenMezz_JOT', amount: '1000000000000000000', priceUsd: 0.6 },
+      classifierSource: 'rule',
+    };
+    const rows = buildKenyaKraRows([tx]);
+    expect(rows[0]!.asset).toBe('CELO');
+  });
+
+  it('OTHER: symbol wins over assetName in asset_type stablecoin mapping', () => {
+    // OECD CARF has no 'asset' label field — it uses asset_type. Verify the
+    // assetLabel() is computed correctly by checking the symbol maps to
+    // stablecoin (USDC is a known stablecoin).
+    const tx: ClassifiedTx = {
+      hash: '0xabcd000000000000000000000000000000000000000000000000000000001234',
+      type: 'INCOME',
+      timestamp: 1_704_067_200,
+      assetIn: { symbol: 'USDC', assetName: 'KarmenMezz_JOT', amount: '1000000000000000000', priceUsd: 1.0 },
+      classifierSource: 'rule',
+    };
+    const rows = buildOecdCarfRows([tx], pnlForOther, 2024);
+    expect(rows[0]!.asset_type).toBe('stablecoin');
+  });
+
+  // Case (b): assetName used when symbol is absent
+  it('assetName used when symbol is absent (NG)', () => {
+    const tx: ClassifiedTx = {
+      hash: '0xfade00000000000000000000000000000000000000000000000000000000cafe',
+      type: 'INCOME',
+      timestamp: 1_704_067_200,
+      assetIn: { symbol: '', assetName: 'KarmenMezz_JOT', amount: '1000000000000000000', priceUsd: 1.0 },
+      classifierSource: 'rule',
+    };
+    const rows = buildNigeriaFirsRows([tx], pnlForNg, 2024);
+    expect(rows[0]!.asset).toBe('KarmenMezz_JOT');
+  });
+
+  it('assetName used when symbol is absent (KE)', () => {
+    const tx: ClassifiedTx = {
+      hash: '0xfade00000000000000000000000000000000000000000000000000000000cafe',
+      type: 'INCOME',
+      timestamp: 1_704_067_200,
+      assetIn: { symbol: '', assetName: 'KarmenMezz_JOT', amount: '1000000000000000000', priceUsd: 0.6 },
+      classifierSource: 'rule',
+    };
+    const rows = buildKenyaKraRows([tx]);
+    expect(rows[0]!.asset).toBe('KarmenMezz_JOT');
+  });
+
+  it('OTHER: assetName used when symbol is absent — asset_type becomes other_crypto', () => {
+    // OECD has no 'asset' label field; empty symbol → asset_type = other_crypto.
+    const tx: ClassifiedTx = {
+      hash: '0xfade00000000000000000000000000000000000000000000000000000000cafe',
+      type: 'INCOME',
+      timestamp: 1_704_067_200,
+      assetIn: { symbol: '', assetName: 'KarmenMezz_JOT', amount: '1000000000000000000', priceUsd: 1.0 },
+      classifierSource: 'rule',
+    };
+    const rows = buildOecdCarfRows([tx], pnlForOther, 2024);
+    expect(rows[0]!.asset_type).toBe('other_crypto');
+  });
+
+  // Case (c): shortened address when neither symbol nor assetName is present
+  it('shortened address used when neither symbol nor assetName is present (NG)', () => {
+    const tx: ClassifiedTx = {
+      hash: '0x37f700000000000000000000000000000000000000000000000000000000abcd',
+      type: 'SWAP',
+      timestamp: 1_716_662_400,
+      assetIn: { symbol: '', assetName: '', amount: '1', priceUsd: 1.0 },
+      assetOut: { symbol: '', assetName: '', amount: '1', priceUsd: 0.65 },
+      classifierSource: 'rule',
+    };
+    const rows = buildNigeriaFirsRows([tx], pnlForNg, 2024);
+    // assetIn is preferred; first 6 hex chars after '0x' = '37F700'
+    expect(rows[0]!.asset).toBe('Token@37F700');
+  });
+
+  it('shortened address used when neither symbol nor assetName is present (KE)', () => {
+    const tx: ClassifiedTx = {
+      hash: '0x37f700000000000000000000000000000000000000000000000000000000abcd',
+      type: 'SWAP',
+      timestamp: 1_716_662_400,
+      assetIn: { symbol: '', assetName: '', amount: '1', priceUsd: 1.0 },
+      assetOut: { symbol: '', assetName: '', amount: '1', priceUsd: 0.65 },
+      classifierSource: 'rule',
+    };
+    const rows = buildKenyaKraRows([tx]);
+    expect(rows[0]!.asset).toBe('Token@37F700');
+  });
+
+  it('OTHER: neither symbol nor assetName — asset_type becomes other_crypto', () => {
+    // OECD has no 'asset' label field; empty symbol → asset_type = other_crypto.
+    const tx: ClassifiedTx = {
+      hash: '0x37f700000000000000000000000000000000000000000000000000000000abcd',
+      type: 'SWAP',
+      timestamp: 1_716_662_400,
+      assetIn: { symbol: '', assetName: '', amount: '1', priceUsd: 1.0 },
+      assetOut: { symbol: '', assetName: '', amount: '1', priceUsd: 0.65 },
+      classifierSource: 'rule',
+    };
+    const rows = buildOecdCarfRows([tx], pnlForOther, 2024);
+    expect(rows[0]!.asset_type).toBe('other_crypto');
   });
 });

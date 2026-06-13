@@ -51,7 +51,7 @@ program
   .option('--method <FIFO|LIFO|WAC>', 'Cost-basis method', 'FIFO')
   .option('--emit-onchain-log', 'Broadcast a 0-value self-tx on Celo (Track 2)', false)
   .option('--nl-query <question>', 'Optional natural-language Q&A against the report')
-  .option('--output <file>', 'CSV output path', './agent-06-report.csv')
+  .option('--output <file>', 'CSV output path (default: auto-generated unique path: ./agent-06-<shortaddr>-<year>-<YYYYMMDDHHMMSS>.csv)')
   .option('--refresh', 'Bypass the tx-fetcher cache', false)
   .showHelpAfterError();
 
@@ -75,7 +75,12 @@ function parseArgs(): ParsedArgs {
     method: opts.method as CostBasisMethod,
     emitOnchainLog: Boolean(opts.emitOnchainLog),
     nlQuery: opts.nlQuery as string | undefined,
-    output: opts.output as string,
+    output:
+      opts.output ??
+      `./agent-06-${opts.address.slice(2, 8).toLowerCase()}-${parseInt(opts.taxYear, 10)}-${new Date()
+        .toISOString()
+        .replace(/[-:T]/g, '')
+        .slice(0, 14)}.csv`,
     refresh: Boolean(opts.refresh),
   };
 }

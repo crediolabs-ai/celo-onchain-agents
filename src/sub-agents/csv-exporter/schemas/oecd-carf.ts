@@ -25,7 +25,7 @@
  * Skill last updated 2026-06-07.
  */
 
-import type { ClassifiedTx, PnlOutput } from '../../../shared/types.js';
+import type { AssetLeg, ClassifiedTx, PnlOutput } from '../../../shared/types.js';
 import type { Disposal } from '../../pnl-calculator/engine.js';
 
 /** Stablecoin symbols on Celo (per contract data). */
@@ -37,6 +37,20 @@ const STABLECOIN_SYMBOLS = new Set([
   'cREAL',
   'G$',
 ]);
+
+/**
+ * Pick the best human-readable label from an AssetLeg.
+ * Fallback chain: symbol || assetName || Token@<first-6-hex-of-tx-hash>
+ * Fix #7: prevents bare contract names (e.g. "KarmenMezz_JOT") from appearing
+ * in CSV when a proper symbol is unavailable.
+ */
+function assetLabel(leg: AssetLeg | undefined, txHash: string): string {
+  if (!leg) return 'UNKNOWN';
+  if (leg.symbol) return leg.symbol;
+  if (leg.assetName) return leg.assetName;
+  const hex = txHash.slice(2, 8).toUpperCase();
+  return `Token@${hex}`;
+}
 
 /** Map our TxType → CARF tx_type taxonomy. Visible for unit testing. */
 export function carfTxType(tx: ClassifiedTx): string {
@@ -92,6 +106,7 @@ function buildDisposalMap(pnl: PnlOutput): Map<string, Disposal> {
 
 /**
  * Build OECD CARF rows from classified transactions + PNL output.
+ * Fix #7: asset label uses symbol || assetName || shortenedAddress fallback chain.
  */
 export function buildOecdCarfRows(
   classified: ClassifiedTx[],
@@ -109,7 +124,7 @@ export function buildOecdCarfRows(
     const assetIn = tx.assetIn;
     const assetOut = tx.assetOut;
 
-    const asset = assetIn?.symbol || assetOut?.symbol || 'UNKNOWN';
+    const asset = assetLabel(assetIn, tx.hash) || assetLabel(assetOut, tx.hash) || 'UNKNOWN';
     const txType = carfTxType(tx);
 
     // CARF proceeds/cost-basis: only meaningful for "exchange" (SWAP) events.

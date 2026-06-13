@@ -15,11 +15,30 @@
  * Reference: FIRS Information Circular No. 2021/02; skill last updated 2026-06-07.
  */
 
-import type { ClassifiedTx, PnlOutput } from '../../../shared/types.js';
+import type { AssetLeg, ClassifiedTx, PnlOutput } from '../../../shared/types.js';
 import type { Disposal } from '../../pnl-calculator/engine.js';
 
-/** NG FIRS exchange rate: 1 USD = 1550 NGN ( CBN reference, 2024 average). */
-const NGN_PER_USD = 1550;
+/**
+ * NG FIRS exchange rate: 1 USD = NGN_PER_USD env var, default 1500 (2026 H1 CBN average).
+ * DefiLlama does not list USD/NGN — no live oracle fetch available.
+ * Override via NGN_PER_USD in .env for current spot rates.
+ */
+const NGN_PER_USD = Number(process.env.NGN_PER_USD ?? 1500);
+
+/**
+ * Pick the best human-readable label from an AssetLeg.
+ * Fallback chain: symbol || assetName || Token@<first-6-hex-of-tx-hash>
+ * Fix #7: prevents bare contract names (e.g. "KarmenMezz_JOT") from appearing
+ * in CSV when a proper symbol is unavailable.
+ */
+function assetLabel(leg: AssetLeg | undefined, txHash: string): string {
+  if (!leg) return 'UNKNOWN';
+  if (leg.symbol) return leg.symbol;
+  if (leg.assetName) return leg.assetName;
+  // Shortened address derived from the tx hash — txHash is always 0x-prefixed.
+  const hex = txHash.slice(2, 8).toUpperCase();
+  return `Token@${hex}`;
+}
 
 /**
  * Map our TxType enum to FIRS-friendly type labels.
@@ -48,7 +67,7 @@ function firsTypeLabel(tx: ClassifiedTx): string {
 export interface NigeriaFirsRow {
   tx_date: string;           // ISO 8601 date (UTC)
   type: string;              // income | disposal | other
-  asset: string;             // token symbol
+  asset: string;             // symbol || assetName || shortened address (Fix #7)
   amount: string;            // raw decimal string (full precision)
   price_ngn: number;        // CBN rate × priceUsd, 2 dp
   cost_basis_ngn: number;   // cost in NGN, 2 dp (0 for income/other)
@@ -79,6 +98,8 @@ function buildDisposalMap(pnl: PnlOutput): Map<string, Disposal> {
  * D2: `cumulative_gain_ngn` is YTD only — it resets to 0 whenever the
  * calendar year changes so that the running total always reflects the current
  * tax year's CGT liability, not lifetime gains.
+ *
+ * Fix #7: asset label uses symbol || assetName || shortenedAddress fallback chain.
  */
 export function buildNigeriaFirsRows(
   classified: ClassifiedTx[],
@@ -101,7 +122,7 @@ export function buildNigeriaFirsRows(
     // Skip GAS-only txs (gas cost is captured in disposal rows as a deductible).
     if (tx.type === 'GAS') continue;
 
-    const asset = assetIn?.symbol || assetOut?.symbol || 'UNKNOWN';
+    const asset = assetLabel(assetIn, tx.hash) || assetLabel(assetOut, tx.hash) || 'UNKNOWN';
     const amount = assetIn?.amount ?? assetOut?.amount ?? '0';
 
     // Convert price to NGN.
