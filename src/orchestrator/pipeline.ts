@@ -70,8 +70,17 @@ export async function runPipeline(input: RunPipelineInput): Promise<PipelineResu
     jurisdiction: request.jurisdiction,
   });
 
+  // Filter classified txs to the requested tax year so the CSV is a year-scoped
+  // report (not a lifetime dump). The PNL engine keeps multi-year totals intact
+  // for the summary; only the CSV narrows to the requested year. Year boundary
+  // is [Jan 1 00:00:00 UTC, Jan 1 00:00:00 UTC next year).
+  const yearStartSec = Math.floor(Date.UTC(request.taxYear, 0, 1) / 1000);
+  const yearEndSec = Math.floor(Date.UTC(request.taxYear + 1, 0, 1) / 1000);
+  const yearScopedClassified = classified.classified.filter(
+    (c) => c.timestamp >= yearStartSec && c.timestamp < yearEndSec,
+  );
   const csvInput: CsvExportInput = {
-    classified: classified.classified,
+    classified: yearScopedClassified,
     pnl,
     jurisdiction: request.jurisdiction,
     taxYear: request.taxYear,
