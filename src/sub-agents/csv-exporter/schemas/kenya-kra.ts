@@ -80,7 +80,7 @@ export function buildKenyaKraRows(
 
     if (tx.type === 'GAS') continue; // Gas not deductible under KRA guidance
 
-    const asset = assetIn?.symbol ?? assetOut?.symbol ?? 'UNKNOWN';
+    const asset = assetIn?.symbol || assetOut?.symbol || 'UNKNOWN';
     const amount = assetIn?.amount ?? assetOut?.amount ?? '0';
 
     const priceUsd = assetIn?.priceUsd ?? assetOut?.priceUsd ?? 0;

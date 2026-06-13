@@ -109,7 +109,7 @@ export function buildOecdCarfRows(
     const assetIn = tx.assetIn;
     const assetOut = tx.assetOut;
 
-    const asset = assetIn?.symbol ?? assetOut?.symbol ?? 'UNKNOWN';
+    const asset = assetIn?.symbol || assetOut?.symbol || 'UNKNOWN';
     const txType = carfTxType(tx);
 
     // CARF proceeds/cost-basis: only meaningful for "exchange" (SWAP) events.

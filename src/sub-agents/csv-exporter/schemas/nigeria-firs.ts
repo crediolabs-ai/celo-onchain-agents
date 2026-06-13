@@ -101,7 +101,7 @@ export function buildNigeriaFirsRows(
     // Skip GAS-only txs (gas cost is captured in disposal rows as a deductible).
     if (tx.type === 'GAS') continue;
 
-    const asset = assetIn?.symbol ?? assetOut?.symbol ?? 'UNKNOWN';
+    const asset = assetIn?.symbol || assetOut?.symbol || 'UNKNOWN';
     const amount = assetIn?.amount ?? assetOut?.amount ?? '0';
 
     // Convert price to NGN.
