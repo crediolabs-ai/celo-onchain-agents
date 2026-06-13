@@ -81,6 +81,11 @@ describe('ERC-4626 vault deposit — investor tx', () => {
     expect(out.protocolDecoderHits).toBe(1);
     expect(out.classified[0]!.notes).toContain('ERC4626');
     expect(out.classified[0]!.notes).toContain('DEPOSIT');
+    // Regression: vaultAddress must survive Zod parse. Was silently
+    // stripped when ClassifiedTxSchema didn't declare the field, which
+    // broke Wave 3 end-to-end (deposit classified correctly but the
+    // downstream price enrichment couldn't see vaultAddress → $0 row).
+    expect(out.classified[0]!.vaultAddress).toBe(VAULT);
   });
 
   it('mint selector 0x94bf804d on vault → ERC4626 DEPOSIT', async () => {

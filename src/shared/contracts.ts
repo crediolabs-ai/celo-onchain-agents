@@ -227,3 +227,32 @@ export function makeContractLookupForChain(chainId: number): ContractLookup {
   if (chainId === celo.id) return makeContractLookup('mainnet');
   throw new Error(`makeContractLookupForChain: unknown chainId ${chainId}`);
 }
+
+/**
+ * Map of ERC-4626 vault contract address → underlying token metadata.
+ *
+ * Used by the vault oracle (src/infra/vault-oracle.ts) for the on-chain
+ * `convertToAssets(1e18)` price lookup, and by the orchestrator's
+ * `enrichClassifiedPrices` to derive the historical share price from
+ * the deposit's token transfers (underlying out, shares in). Keyed by
+ * the lowercased vault address.
+ *
+ * `address` is the underlying token's contract address (verified via
+ * the vault's `asset()` accessor). `decimals` is the underlying's
+ * on-chain decimals (USDC = 6, cUSD = 18, etc.) — needed to normalize
+ * the raw transfer values into a unitless ratio.
+ *
+ * Source: verified on-chain 2026-06-12 via the vault's `asset()`
+ * accessor and Etherscan's contract page for each underlying token.
+ */
+export const VAULT_UNDERLYING_BY_ADDRESS: Readonly<
+  Record<string, { symbol: string; decimals: number; address: Address }>
+> = {
+  // Untangled USDy — wraps bridged USDC.e on Celo mainnet.
+  // Verified: vault.asset() = USDC_BRIDGED (0xcebA9300…2118C, 6 decimals).
+  '0x2a68c98bd43aa24331396f29166aef2bfd51343f': {
+    symbol: 'USDC',
+    decimals: 6,
+    address: USDC_BRIDGED,
+  },
+};

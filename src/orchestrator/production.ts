@@ -28,6 +28,8 @@ import { fetchTxs } from '../sub-agents/tx-fetcher/index.js';
 import { createAgentWallet } from '../infra/wallet.js';
 import { createLogEmitter } from '../infra/log-emitter.js';
 import { DefiLlamaOracle } from '../shared/price-oracle/defillama.js';
+import { VaultOracle } from '../infra/vault-oracle.js';
+import { VAULT_UNDERLYING_BY_ADDRESS } from '../shared/contracts.js';
 import type { Timestamp } from '../shared/types.js';
 import type { AppConfig } from '../shared/config.js';
 import type { PipelineDeps } from './types.js';
@@ -45,6 +47,7 @@ import type {
   TxHash,
   Address,
   CostBasisMethod,
+  TokenTransfer,
 } from '../shared/types.js';
 
 /** Inputs needed for the production wiring beyond the AppConfig. */
@@ -91,6 +94,10 @@ export function makeProductionDeps(input: ProductionDepsInput): PipelineDeps {
   // when the classifier correctly identified income events. DefiLlama
   // is fully public — no API key needed, generous rate limit.
   const priceOracle = new DefiLlamaOracle();
+  // Vault oracle computes share-to-USD price for ERC-4626 vault events
+  // by reading `convertToAssets` on-chain at the event's block. Falls
+  // back to DefiLlama for unknown vaults or RPC failures.
+  const vaultOracle = new VaultOracle({ rpcUrl: config.celoRpcUrl, defiLlamaOracle: priceOracle });
 
   const classifierDeps: ClassifyDeps = {
     makeLookup: makeContractLookup,
@@ -112,12 +119,13 @@ export function makeProductionDeps(input: ProductionDepsInput): PipelineDeps {
     classify: async ({ fetched }): Promise<ClassifyOutput> => {
       const out = await classifyWithDeps({ fetched, network }, classifierDeps);
       // Price enrichment: fill priceUsd on each classified tx's
-      // assetIn/assetOut via the CoinGecko oracle. Without this step,
-      // every tx leaves the classifier with priceUsd=0, and the PNL
-      // engine + CSV exporter read that zero straight into the year
-      // summary (yielding $0 totals even on real income events). The
-      // oracle's internal cache dedupes lookups per (symbol, ts).
-      await enrichClassifiedPrices(out.classified, priceOracle);
+      // assetIn/assetOut. Vault events go through the on-chain
+      // convertToAssets oracle (receipt tokens are synthetic, not on
+      // DefiLlama); everything else falls through to DefiLlama. Without
+      // this step, every tx leaves the classifier with priceUsd=0 and
+      // the PNL engine + CSV exporter read that zero straight into the
+      // year summary. The oracles' internal caches dedupe lookups.
+      await enrichClassifiedPrices(out.classified, priceOracle, vaultOracle, fetched.rawTxns, fetched.tokenTransfers);
       return out;
     },
 
@@ -155,17 +163,70 @@ export function makeProductionDeps(input: ProductionDepsInput): PipelineDeps {
  * currently has `priceUsd: 0` (the classifier's default for the
  * rule-engine and protocol-decoder paths — pricing is not its job).
  *
+ * Priority for each leg:
+ *   1. Transfer-ratio for vault events — derives the share-to-underlying
+ *      ratio from the tx's own token transfers (underlying out, shares
+ *      in). Accurate at event time, no RPC required, works on any
+ *      archive (or no archive). Multiplied by the underlying's USD
+ *      price from DefiLlama to produce a USD/share figure.
+ *   2. DefiLlama fallback for non-vault events and vault events where
+ *      the transfer-ratio path couldn't resolve the data.
+ *
  * Lookups are deduped per (symbol, timestamp) within this call so a
- * 1,000-tx wallet doesn't issue 1,000 HTTP requests to CoinGecko.
- * Failures (unknown symbol, history endpoint out-of-range, rate
- * limit) are silent — the engine records priceGaps on the engine
- * result for the CLI to surface.
+ * 1,000-tx wallet doesn't issue 1,000 HTTP requests.
+ * Failures (unknown symbol, history endpoint out-of-range) are silent
+ * — the engine records priceGaps for the CLI to surface.
  */
 async function enrichClassifiedPrices(
   classified: readonly ClassifiedTx[],
   oracle: DefiLlamaOracle,
+  vaultOracle: VaultOracle,
+  rawTxns: readonly { hash: TxHash; blockNumber: number | string }[],
+  tokenTransfers: readonly TokenTransfer[],
 ): Promise<void> {
-  // Collect unique (symbol, timestamp) pairs first.
+  const blockByHash = new Map<TxHash, bigint>();
+  for (const tx of rawTxns) {
+    blockByHash.set(tx.hash, BigInt(tx.blockNumber));
+  }
+
+  // 1. Vault events via transfer-ratio (no RPC).
+  //    The deposit's own token transfers carry the exact historical
+  //    exchange rate: underlying_amount / shares_amount = price/share
+  //    in underlying units. Multiply by the underlying's USD price
+  //    (DefiLlama — handles stables at $1, real assets at real price).
+  for (const cls of classified) {
+    if (!cls.vaultAddress) continue;
+    const ratio = deriveVaultRatioFromTransfers(cls, tokenTransfers);
+    if (ratio === null) continue;
+    const underlying = VAULT_UNDERLYING_BY_ADDRESS[cls.vaultAddress.toLowerCase()];
+    if (!underlying) continue;
+    const underlyingPrice = await oracle.getHistoricalPrice(underlying.symbol, cls.timestamp);
+    if (!underlyingPrice) continue;
+    const usdPrice = ratio * underlyingPrice.priceUsd;
+    for (const leg of [cls.assetIn, cls.assetOut]) {
+      if (leg && leg.priceUsd === 0) leg.priceUsd = usdPrice;
+    }
+  }
+
+  // 2. Vault events that didn't get priced via transfer-ratio fall
+  //    back to the on-chain oracle (convertToAssets at the event block).
+  for (const cls of classified) {
+    if (!cls.vaultAddress) continue;
+    let alreadyPriced = false;
+    for (const leg of [cls.assetIn, cls.assetOut]) {
+      if (leg && leg.priceUsd > 0) { alreadyPriced = true; break; }
+    }
+    if (alreadyPriced) continue;
+    const block = blockByHash.get(cls.hash);
+    if (block === undefined) continue;
+    const vaultPrice = await vaultOracle.getSharePriceUsd(cls.vaultAddress, block, cls.timestamp);
+    if (vaultPrice === null) continue;
+    for (const leg of [cls.assetIn, cls.assetOut]) {
+      if (leg && leg.priceUsd === 0) leg.priceUsd = vaultPrice;
+    }
+  }
+
+  // 3. DefiLlama fallback for non-vault events (and any legs still at 0).
   const seen = new Set<string>();
   type Pair = { symbol: string; ts: Timestamp };
   const pairs: Pair[] = [];
@@ -178,7 +239,6 @@ async function enrichClassifiedPrices(
       pairs.push({ symbol: leg.symbol, ts: cls.timestamp });
     }
   }
-  // Resolve all unique pairs in parallel (oracle internally caches).
   const prices = new Map<string, number>();
   await Promise.all(
     pairs.map(async ({ symbol, ts }) => {
@@ -186,7 +246,6 @@ async function enrichClassifiedPrices(
       if (point) prices.set(`${symbol}:${ts}`, point.priceUsd);
     }),
   );
-  // Stamp each classified leg with the looked-up price.
   for (const cls of classified) {
     for (const leg of [cls.assetIn, cls.assetOut]) {
       if (!leg || leg.priceUsd > 0) continue;
@@ -194,4 +253,57 @@ async function enrichClassifiedPrices(
       if (p !== undefined) leg.priceUsd = p;
     }
   }
+}
+
+/**
+ * Derive the share-to-underlying ratio for an ERC-4626 event from the
+ * tx's own token transfers.
+ *
+ * For a deposit: user pays `X` underlying (often via a router/proxy
+ * that forwards to the vault — the underlying transfer's counterparty
+ * is therefore NOT always the vault), and the vault mints `Y` shares
+ * to the user. The share transfer's `contractAddress` IS the vault
+ * itself (the vault is the ERC-20 contract for its own receipt token).
+ * Ratio = X / Y (in normalized units, i.e. dividing each by its decimals).
+ *
+ * Returns the ratio in underlying units per 1 share (multiply by
+ * underlying's USD price to get USD/share), or null if the data is
+ * missing.
+ */
+function deriveVaultRatioFromTransfers(
+  classified: ClassifiedTx,
+  tokenTransfers: readonly TokenTransfer[],
+): number | null {
+  if (!classified.vaultAddress) return null;
+  const underlying = VAULT_UNDERLYING_BY_ADDRESS[classified.vaultAddress.toLowerCase()];
+  if (!underlying) return null;
+
+  const vault = classified.vaultAddress.toLowerCase();
+  const underlyingAddress = underlying.address.toLowerCase();
+  const txTransfers = tokenTransfers.filter((t) => t.hash === classified.hash);
+
+  // Share transfer: contractAddress is the vault itself. This is the
+  // strong signal that distinguishes a vault event from a coincidental
+  // same-tx same-token transfer on a different contract.
+  const sharesTransfer = txTransfers.find((t) => t.contractAddress.toLowerCase() === vault);
+  if (!sharesTransfer) return null;
+
+  // Underlying transfer: any same-tx transfer of the underlying token
+  // (typically 1 per deposit; the counterparty may be a router/proxy
+  // instead of the vault, so we don't filter on from/to).
+  const underlyingTransfer = txTransfers.find(
+    (t) => t.contractAddress.toLowerCase() === underlyingAddress,
+  );
+  if (!underlyingTransfer) return null;
+
+  const underlyingAmount = BigInt(underlyingTransfer.value);
+  const sharesAmount = BigInt(sharesTransfer.value);
+  if (sharesAmount === 0n) return null;
+
+  const underlyingUnit = 10n ** BigInt(underlying.decimals);
+  const sharesDecimals = sharesTransfer.tokenDecimals;
+  const sharesUnit = 10n ** BigInt(sharesDecimals);
+  const ratio = Number(underlyingAmount * sharesUnit) / Number(sharesAmount * underlyingUnit);
+  if (ratio <= 0 || !Number.isFinite(ratio)) return null;
+  return ratio;
 }

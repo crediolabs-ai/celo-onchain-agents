@@ -61,7 +61,7 @@ import {
 import { findMatchingRule } from './rules.js';
 import { llmClassifyTx, type LlmFallbackDeps } from './llm-fallback.js';
 import type { PredicateContext } from './predicates.js';
-import { decodeProtocolAction, SELECTOR_MAP } from './protocol-decoder.js';
+import { decodeProtocolAction, isERC4626Vault, SELECTOR_MAP } from './protocol-decoder.js';
 import { ProtocolName, protocolActionToTxType } from './protocol-actions.js';
 
 // ─── Public surface ────────────────────────────────────────────────────────
@@ -211,23 +211,34 @@ export async function classifyWithDeps(
     //    lifted from `flagged:UNKNOWN` to a named category.
     const protocolHit = lookupProtocol(tx, contractMetadata, protocolIndex);
     if (protocolHit) {
-      const categoryType = categoryToTxType(protocolHit.category, ctx, protocolHit);
-      if (categoryType !== null) {
-        const txOut: ClassifiedTx = {
-          hash: tx.hash,
-          type: categoryType,
-          timestamp: tx.timestamp,
-          classifierSource: 'rule', // rule-derived; doesn't need LLM review
-          confidence: 0.7, // baseline for protocol-name matches
-          notes: `Protocol-aware: ${protocolHit.name} (${protocolHit.category})`,
-        };
-        classified.push(txOut);
-        interactionBreakdown[protocolHit.name] =
-          (interactionBreakdown[protocolHit.name] ?? 0) + 1;
-        continue;
+      // Short-circuit: for KNOWN ERC-4626 vaults, fall through to the
+      // protocol-decoder path (step 2.7). That path sets YIELD (not
+      // INTERACTION) and wires `vaultAddress` for downstream per-vault
+      // lot identity + price enrichment. INTERACTION would mask the
+      // actual deposit semantics and skip vault pricing.
+      const isKnownVault =
+        protocolHit.category === 'VAULT' &&
+        tx.to !== null &&
+        isERC4626Vault(tx.to.toLowerCase());
+      if (!isKnownVault) {
+        const categoryType = categoryToTxType(protocolHit.category, ctx, protocolHit);
+        if (categoryType !== null) {
+          const txOut: ClassifiedTx = {
+            hash: tx.hash,
+            type: categoryType,
+            timestamp: tx.timestamp,
+            classifierSource: 'rule', // rule-derived; doesn't need LLM review
+            confidence: 0.7, // baseline for protocol-name matches
+            notes: `Protocol-aware: ${protocolHit.name} (${protocolHit.category})`,
+          };
+          classified.push(txOut);
+          interactionBreakdown[protocolHit.name] =
+            (interactionBreakdown[protocolHit.name] ?? 0) + 1;
+          continue;
+        }
+        // Category matched but didn't produce a TxType (shouldn't happen with
+        // current mapping) — fall through.
       }
-      // Category matched but didn't produce a TxType (shouldn't happen with
-      // current mapping) — fall through.
     }
 
     // 2.5. No protocol hit. Try the function-selector path: extract the
@@ -509,6 +520,11 @@ function categoryToTxType(
       // outgoing → TRANSFER_OUT. We keep it simple: any transfer with
       // the vault → INTERACTION so the breakdown counter ticks; the
       // downstream PNL engine handles cost basis.
+      //
+      // NOTE: For KNOWN ERC-4626 vaults (registered in protocol-decoder's
+      // ERC4626_VAULTS set), the caller short-circuits before invoking
+      // categoryToTxType and falls through to the protocol-decoder path
+      // (step 2.7) instead — that path sets YIELD + vaultAddress.
       if (ctx.transfers.length > 0) return 'INTERACTION';
       return null;
     }

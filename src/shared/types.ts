@@ -373,6 +373,11 @@ export const ClassifiedTxSchema = z.object({
   confidence: z.number().min(0).max(1).optional(),
   aggregatedFromHashes: z.array(TxHashSchema).optional(),
   notes: z.string().optional(),
+  // ERC-4626 vault address — set by the protocol-decoder path when a tx
+  // hits a registered vault. Drives per-vault lot identity in the PNL
+  // engine and vault-aware price enrichment in the orchestrator. Without
+  // this in the schema, Zod silently strips the field on parse.
+  vaultAddress: HexAddressSchema.optional(),
 });
 
 export const RawTxSchema = z.object({

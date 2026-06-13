@@ -310,7 +310,7 @@ function isMoolaCToken(addr: string): boolean {
   return addr === MOOLA_CTOKEN_CUSD || addr === MOOLA_CTOKEN_CEUR;
 }
 
-function isERC4626Vault(addr: string): boolean {
+export function isERC4626Vault(addr: string): boolean {
   return ERC4626_VAULTS.has(addr);
 }
 
