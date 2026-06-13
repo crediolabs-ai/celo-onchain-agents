@@ -53,9 +53,9 @@ const GOODDOLLAR_CLAIMERS = new Set<string>([
   '0x43d72ff17701b2da814620735c39c620ce0ea4a1',
 ].map((a) => a.toLowerCase()));
 
-// Untangled USDy vault (ERC-4626) — verified on-chain 2026-06-12.
+// Untangled USDyc vault (ERC-4626) — verified on-chain 2026-06-13.
 // Source: eth_call on 0x2a68c98bd43aa24331396f29166aef2bfd51343f;
-// name()=USDy, symbol()=USDy, decimals()=6, asset()=0xcebA9300… (USDC bridged).
+// name()=USDYc, symbol()=USDYc, decimals()=6, asset()=0xcebA9300… (USDC bridged).
 const UNTANGLED_USDY_VAULT = '0x2a68c98bd43aa24331396f29166aef2bfd51343f'.toLowerCase();
 
 /** Registered ERC-4626 vault addresses. Extend with more entries as needed. */

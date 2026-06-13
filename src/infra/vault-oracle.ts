@@ -4,7 +4,7 @@
  * Owner: Credio (infra).
  *
  * Why this exists:
- *   - Vault receipt tokens (USDy, m-cUSD, etc.) are synthetic — minted by
+ *   - Vault receipt tokens (USDyc, m-cUSD, etc.) are synthetic — minted by
  *     the vault contract, not by an external issuer. DefiLlama and CoinGecko
  *     do not list them.
  *   - The vault itself is the source of truth for its own exchange rate via

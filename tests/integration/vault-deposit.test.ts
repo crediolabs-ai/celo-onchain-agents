@@ -1,5 +1,5 @@
 /**
- * Integration test: investor deposit into Untangled USDy ERC-4626 vault.
+ * Integration test: investor deposit into Untangled USDyc ERC-4626 vault.
  *
  * Owner: Tuan (tx-classifier sub-agent).
  *

@@ -160,8 +160,8 @@ export const NAMED_CONTRACTS: readonly NamedContract[] = [
   },
   {
     alias: 'UNTANGLED_USDY_VAULT',
-    description: 'Untangled USDy — ERC-4626 vault wrapping USDC on Celo mainnet.',
-    source: 'verified on-chain 2026-06-12 via eth_call on 0x2a68…1343f; name=USDy symbol=USDy decimals=6 asset()=0xcebA9300…',
+    description: 'Untangled USDyc — ERC-4626 vault wrapping USDC on Celo mainnet.',
+    source: 'verified on-chain 2026-06-13 via eth_call on 0x2a68…1343f; name=USDYc symbol=USDYc decimals=6 asset()=0xcebA9300…',
     addresses: {
       alfajores: null,
       mainnet: '0x2a68c98bd43aa24331396f29166aef2bfd51343f',
@@ -248,7 +248,7 @@ export function makeContractLookupForChain(chainId: number): ContractLookup {
 export const VAULT_UNDERLYING_BY_ADDRESS: Readonly<
   Record<string, { symbol: string; decimals: number; address: Address }>
 > = {
-  // Untangled USDy — wraps bridged USDC.e on Celo mainnet.
+  // Untangled USDyc — wraps bridged USDC.e on Celo mainnet.
   // Verified: vault.asset() = USDC_BRIDGED (0xcebA9300…2118C, 6 decimals).
   '0x2a68c98bd43aa24331396f29166aef2bfd51343f': {
     symbol: 'USDC',
