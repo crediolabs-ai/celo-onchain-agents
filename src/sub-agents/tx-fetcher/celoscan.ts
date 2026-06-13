@@ -39,7 +39,12 @@ export interface CeloscanClientOptions {
   apiUrl: string;
   apiKey?: string;
   fetcher?: CeloscanFetcher;
-  /** Max page offset (default 10_000, per Celoscan hard limit). */
+  /**
+   * Max rows per page (default 100). See {@link DEFAULT_MAX_PAGE} for the
+   * rationale — the 3/sec rate limit + `page × offset ≤ 10_000` constraint
+   * makes 10_000 impractical for wallets with >100 txs (the second page
+   * is rejected as a rate-limit error).
+   */
   maxPageSize?: number;
   /**
    * Etherscan V2 chain id (e.g. 42220 for Celo mainnet, 44787 for Alfajores).
@@ -57,7 +62,26 @@ export interface FetchPageArgs {
   sort?: 'asc' | 'desc';
 }
 
-const DEFAULT_MAX_PAGE = 10_000;
+/**
+ * Max rows per pagination page. Constrained by two competing limits:
+ *   1. Celoscan hard limit: `page × offset ≤ 10_000` — so 1_000 leaves
+ *      room for 10 pages = 10k rows; 100 leaves room for 100 pages.
+ *   2. Etherscan rate limit: 3 calls/sec on the free tier (and some
+ *      keys see this even with auth). The fetcher makes 3 endpoints
+ *      in parallel via Promise.allSettled, so the very first batch
+ *      already uses the 3/sec budget. With offset=1_000 a single
+ *      wallet (e.g. 0x37f7…5cad, 500+ txs) needs ≥2 pages per endpoint,
+ *      and the second page collides with the rate limit and gets
+ *      `Max calls per sec rate limit reached (3/sec)` returned as
+ *      `status=0, message=NOTOK`.
+ *
+ * 100 keeps the per-page cost low enough that most Celo wallets
+ * finish in 1 page; wallets with 100+ txs paginate, but each
+ * subsequent page lands in a fresh 1-sec window so the rate limit
+ * doesn't compound. The 30s request timeout (http.ts) is plenty of
+ * headroom for the slower pagination.
+ */
+const DEFAULT_MAX_PAGE = 100;
 
 /** Default concurrency for contract-metadata fan-out. Celoscan free tier = 5/sec. */
 const DEFAULT_RATE_LIMIT_CONCURRENCY = 5;
@@ -117,8 +141,14 @@ export function createCeloscanClient(options: CeloscanClientOptions) {
     }
     const body = res.data;
     if (body.status === '0' && body.message !== 'No transactions found') {
+      // Surface the full body when it's a `result: "..."` payload (rate
+      // limits, validation errors) so callers (e.g. the pagination loop's
+      // rate-limit retry) can pattern-match on the original Celoscan
+      // message. Without this, rate limits look like generic "NOTOK".
+      const resultText =
+        typeof body.result === 'string' ? body.result : JSON.stringify(body.result ?? '');
       throw new CeloscanError(
-        `Celoscan error (${args.endpoint} page=${args.page}): ${body.message ?? 'unknown'}`,
+        `Celoscan error (${args.endpoint} page=${args.page}): ${body.message ?? 'unknown'}${resultText ? ' — ' + resultText.slice(0, 200) : ''}`,
       );
     }
     return body.result ?? ([] as unknown as T);

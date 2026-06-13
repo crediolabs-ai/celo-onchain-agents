@@ -34,7 +34,7 @@ describe('CeloscanClient.buildUrl', () => {
     expect(u.searchParams.get('startblock')).toBe('0');
     expect(u.searchParams.get('endblock')).toBe('99999999');
     expect(u.searchParams.get('page')).toBe('1');
-    expect(u.searchParams.get('offset')).toBe('10000');
+    expect(u.searchParams.get('offset')).toBe('100');
     expect(u.searchParams.get('sort')).toBe('asc');
     expect(u.searchParams.get('apikey')).toBeNull();
   });
