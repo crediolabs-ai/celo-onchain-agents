@@ -60,6 +60,7 @@ function makePnl(overrides: Partial<PnlOutput> = {}): PnlOutput {
         realizedGains: 1000,
         income: 500,
         yield: 200,
+        interestEarned: 0,
         deductibleGas: 50,
         taxableIncome: 1650,
       },
@@ -68,6 +69,7 @@ function makePnl(overrides: Partial<PnlOutput> = {}): PnlOutput {
         realizedGains: 800,
         income: 300,
         yield: 100,
+        interestEarned: 0,
         deductibleGas: 30,
         taxableIncome: 1170,
       },
@@ -76,6 +78,7 @@ function makePnl(overrides: Partial<PnlOutput> = {}): PnlOutput {
     unrealizedPnlByAsset: { CELO: 50, USDC: 25, cUSD: 0 },
     incomeTotal: 800,
     yieldTotal: 300,
+    interestEarnedTotal: 0,
     priceGaps: [
       { asset: 'GOLD', timestamp: TS_2024_MID },
       { asset: 'OBSCURE', timestamp: TS_2023_MID },

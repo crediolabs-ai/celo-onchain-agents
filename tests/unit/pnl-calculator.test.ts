@@ -293,6 +293,10 @@ describe('FIFO', () => {
     expect(d.proceedsMicroUsd).toBe(1_000_000n);
     expect(d.costBasisMicroUsd).toBe(1_000_000n);
     expect(d.gainMicroUsd).toBe(0n);
+    // Fix 2026-06-14: vault withdraw gains are interestEarned, not realizedPnl.
+    expect(d.category).toBe('INTEREST_EARNED');
+    expect(result.interestEarnedMicroUsdTotal).toBe(0n); // 1:1 NAV, no gain
+    expect(result.realizedPnlMicroUsdByAsset['USDyc']).toBeUndefined();
     // Vault A queue fully consumed.
     expect(result.remainingLots.get(`${VAULT_A}:USDyc`)).toHaveLength(0);
   });
@@ -356,6 +360,146 @@ describe('FIFO', () => {
     expect(result.disposals[0]!.proceedsMicroUsd).toBe(1_000_000n);
     expect(result.disposals[0]!.costBasisMicroUsd).toBe(1_000_000n);
     expect(result.disposals[0]!.gainMicroUsd).toBe(0n);
+    expect(result.remainingLots.get(`${VAULT_A}:USDyc`)).toHaveLength(0);
+  });
+
+  // ─── Interest-earned + reinvestment cycle (Quan feedback 2026-06-14) ───
+
+  // One USDC = 1,000,000 (6 decimals). Use whole-number amounts (e.g. 5,000
+  // USDC = 5,000,000,000 micro-USDC) so gain math is exact.
+  const FIVE_K_USDC = '5000000000';
+  const FIVE_POINT_THREE_K_USDC = '5300000000';
+  const SIX_K_USDC = '6000000000';
+
+  it('FIFO: vault DEPOSIT alone does NOT add to yield or interestEarned (regression for the deposit-as-yield bug)', () => {
+    // Quan 2026-06-14: "When an investor deposits capital into a vault,
+    // the platform must classify the difference between deposit and
+    // withdrawal as realized taxable income." The DEPOSIT itself is NOT
+    // income — only the WITHDRAW gain is. The pre-fix engine added the
+    // deposit amount to yieldTotal, which inflated the yield line for any
+    // vault user (e.g. KE 0xBE19 showed $5,374.90 yield for a single
+    // $5,374.90 deposit with no disposals).
+    const result = computeFifo({
+      classified: [
+        mkAcquisition({
+          symbol: 'USDyc', amount: FIVE_K_USDC, priceUsd: 1.0,
+          timestamp: TS_2024, vaultAddress: VAULT_A,
+        }),
+      ],
+    });
+    expect(result.disposals).toHaveLength(0);
+    expect(result.yieldMicroUsdTotal).toBe(0n);
+    expect(result.interestEarnedMicroUsdTotal).toBe(0n);
+    expect(result.incomeMicroUsdTotal).toBe(0n);
+    // Lot queued correctly — open position, cost basis = deposit USD.
+    const remaining = result.remainingLots.get(`${VAULT_A}:USDyc`)!;
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]!.costBasisMicroUsd).toBe(5_000_000_000n); // 5,000 USD in micro-USD
+  });
+
+  it('FIFO: vault WITHDRAW with NAV gain routes gain to interestEarned, not realizedPnl', () => {
+    // Deposit 5,000 USDyc at NAV=1.0. Withdraw 5,300 USDC at NAV=1.06
+    // (vault strategy earned 6% yield). Gain = 300 USDC = 0.3K = interest
+    // income, NOT capital gain.
+    const result = computeFifo({
+      classified: [
+        mkAcquisition({
+          symbol: 'USDyc', amount: FIVE_K_USDC, priceUsd: 1.0,
+          timestamp: TS_2024, vaultAddress: VAULT_A,
+        }),
+        {
+          hash: mkHash(),
+          timestamp: TS_2024_MID,
+          type: 'YIELD',
+          assetIn: { symbol: 'USDC', amount: FIVE_POINT_THREE_K_USDC, priceUsd: 1.0 },
+          assetOut: { symbol: 'USDyc', amount: FIVE_K_USDC, priceUsd: 1.06 },
+          classifierSource: 'rule',
+          vaultAddress: VAULT_A,
+        },
+      ],
+    });
+    expect(result.disposals).toHaveLength(1);
+    const d = result.disposals[0]!;
+    expect(d.proceedsMicroUsd).toBe(5_300_000_000n); // 5,300 USDC
+    expect(d.costBasisMicroUsd).toBe(5_000_000_000n); // 5,000 USDyc at 1.0
+    expect(d.gainMicroUsd).toBe(300_000_000n); // 300 USDC = 0.3K interest
+    // The critical routing assertion: gain lands in interestEarned, not
+    // realizedPnl. This is the fix for Quan's "interest earned must be
+    // reported as a separate component" requirement.
+    expect(d.category).toBe('INTEREST_EARNED');
+    expect(result.interestEarnedMicroUsdTotal).toBe(300_000_000n);
+    expect(result.realizedPnlMicroUsdByAsset['USDyc']).toBeUndefined();
+  });
+
+  it('FIFO: full reinvestment cycle — Quan\'s exact spec (5K → 5.3K → 5.3K → 6K = 0.3K + 0.7K interest)', () => {
+    // Quan 2026-06-14: "If an investor withdraws 5.3K (5K principal + 0.3K
+    // gain) and immediately reinvests the full 5.3K into a new position,
+    // the cost-basis for the new position must be updated to 5.3K. If
+    // that 5.3K investment later grows to 6K, the tax calculation should
+    // only apply to the new gain (6K - 5.3K = 0.7K)."
+    //
+    // Scenario:
+    //   t1: DEPOSIT 5,000 USDC → vault mints 5,000 USDyc (cost basis 5,000)
+    //   t2: WITHDRAW 5,300 USDC → vault burns 5,000 USDyc, gives 5,300 USDC
+    //       → gain 300 = 0.3K INTEREST EARNED
+    //   t3: REINVEST 5,300 USDC → vault mints 5,300 USDyc (cost basis 5,300)
+    //   t4: WITHDRAW 6,000 USDC → vault burns 5,300 USDyc, gives 6,000 USDC
+    //       → gain 700 = 0.7K INTEREST EARNED
+    // Total interest earned = 1,000 USDC (NOT 1,000 from the original 5K).
+    const result = computeFifo({
+      classified: [
+        // t1: DEPOSIT 5K
+        mkAcquisition({
+          symbol: 'USDyc', amount: FIVE_K_USDC, priceUsd: 1.0,
+          timestamp: TS_2024, vaultAddress: VAULT_A,
+        }),
+        // t2: WITHDRAW 5.3K (NAV went up 6%)
+        {
+          hash: mkHash(),
+          timestamp: TS_2024_MID,
+          type: 'YIELD',
+          assetIn: { symbol: 'USDC', amount: FIVE_POINT_THREE_K_USDC, priceUsd: 1.0 },
+          assetOut: { symbol: 'USDyc', amount: FIVE_K_USDC, priceUsd: 1.06 },
+          classifierSource: 'rule',
+          vaultAddress: VAULT_A,
+        },
+        // t3: REINVEST 5.3K (new lot at 5.3K cost basis — Quan's req)
+        mkAcquisition({
+          symbol: 'USDyc', amount: FIVE_POINT_THREE_K_USDC, priceUsd: 1.0,
+          timestamp: TS_2024_LATE, vaultAddress: VAULT_A,
+        }),
+        // t4: WITHDRAW 6K (NAV went up 13.2% from the 5.3K basis)
+        {
+          hash: mkHash(),
+          timestamp: TS_2024_LATE + 1,
+          type: 'YIELD',
+          assetIn: { symbol: 'USDC', amount: SIX_K_USDC, priceUsd: 1.0 },
+          assetOut: { symbol: 'USDyc', amount: FIVE_POINT_THREE_K_USDC, priceUsd: 1.132 },
+          classifierSource: 'rule',
+          vaultAddress: VAULT_A,
+        },
+      ],
+    });
+
+    // 2 disposals, both INTEREST_EARNED.
+    expect(result.disposals).toHaveLength(2);
+    expect(result.disposals[0]!.category).toBe('INTEREST_EARNED');
+    expect(result.disposals[1]!.category).toBe('INTEREST_EARNED');
+
+    // Disposal 1: 5K lot at 5K cost, 5.3K proceeds → 0.3K gain
+    expect(result.disposals[0]!.gainMicroUsd).toBe(300_000_000n);
+    expect(result.disposals[0]!.costBasisMicroUsd).toBe(5_000_000_000n);
+    // Disposal 2: 5.3K lot at 5.3K cost (NOT 5K), 6K proceeds → 0.7K gain
+    expect(result.disposals[1]!.gainMicroUsd).toBe(700_000_000n);
+    expect(result.disposals[1]!.costBasisMicroUsd).toBe(5_300_000_000n);
+
+    // Total interest = 1,000 USDC across both disposals.
+    expect(result.interestEarnedMicroUsdTotal).toBe(1_000_000_000n);
+    // Realized PNL stays empty (no capital-gain disposals).
+    expect(result.realizedPnlMicroUsdByAsset['USDyc']).toBeUndefined();
+    // Yield bucket stays empty — deposits are not income.
+    expect(result.yieldMicroUsdTotal).toBe(0n);
+    // Vault A queue is fully consumed at t4.
     expect(result.remainingLots.get(`${VAULT_A}:USDyc`)).toHaveLength(0);
   });
 });
@@ -579,15 +723,19 @@ describe('computePnl', () => {
     expect(out.address).toBe(ADDR);
     expect(out.incomeTotal).toBe(1.0);
     expect(out.yieldTotal).toBe(1.0);
+    expect(out.interestEarnedTotal).toBe(0.0);
 
     const y2024 = out.taxYears.find((y) => y.year === 2024)!;
     expect(y2024).toBeDefined();
     expect(y2024.income).toBe(1.0);
     expect(y2024.yield).toBe(1.0);
+    expect(y2024.interestEarned).toBe(0.0);
     // Realized gain = (1.5 - 1.0) = 0.5
     expect(y2024.realizedGains).toBeCloseTo(0.5, 6);
-    // Taxable income = income + realizedGains - deductibleGas (gas is 0 here)
-    expect(y2024.taxableIncome).toBeCloseTo(1.5, 6);
+    // Taxable income = income + yield + interestEarned + realizedGains - deductibleGas
+    // (gas is 0 here). Fix 2026-06-14: previous formula dropped yield on the
+    // floor; expected 1.5, should be 2.5 with the corrected formula.
+    expect(y2024.taxableIncome).toBeCloseTo(2.5, 6);
 
     // MethodJurisdictionCompat is always populated.
     expect(out.methodJurisdictionCompat).toHaveLength(3);

@@ -13,7 +13,7 @@
  * is the only way to avoid cent-level drift on long histories.
  */
 
-import type { Address, TxHash, ClassifiedTx, AssetLeg, Timestamp } from '../../shared/types.js';
+import type { Address, TxHash, ClassifiedTx, AssetLeg, Timestamp, DisposalCategory } from '../../shared/types.js';
 
 export interface AssetLot {
   /** Token amount in smallest unit (e.g. wei for CELO, 6-dec for USDC). */
@@ -56,6 +56,12 @@ export interface Disposal {
   /** Token's price at acquisition time of the consumed lot (USD per token, decimal). */
   lotPriceUsd: number;
   timestamp: Timestamp;
+  /**
+   * Bucket for tax-authority reporting. 'INTEREST_EARNED' = vault withdraw
+   * (gain is yield the strategy earned). 'CAPITAL_GAIN' = TRANSFER_OUT /
+   * SWAP / non-vault disposal. Added 2026-06-14.
+   */
+  category: DisposalCategory;
 }
 
 export interface EngineResult {
@@ -79,6 +85,16 @@ export interface EngineResult {
   incomeMicroUsdByYear: Record<number, bigint>;
   /** Yield totals bucketed by calendar year, in micro-USD. */
   yieldMicroUsdByYear: Record<number, bigint>;
+  /**
+   * Total interest income realized on vault withdraws, in micro-USD.
+   * Added 2026-06-14 per Quan feedback — a vault DEPOSIT must NOT count as
+   * income; the gain between DEPOSIT and WITHDRAW is realized only at the
+   * WITHDRAW event, as `proceeds - cost basis` on the share disposal.
+   * Sum of `gainMicroUsd` across disposals with `category = 'INTEREST_EARNED'`.
+   */
+  interestEarnedMicroUsdTotal: bigint;
+  /** Interest earned bucketed by calendar year, in micro-USD. */
+  interestEarnedMicroUsdByYear: Record<number, bigint>;
   /** Total gas cost across all GAS events, in micro-USD. */
   gasMicroUsdTotal: bigint;
   /** Asset/timestamp pairs where no historical price was available. */
@@ -210,6 +226,66 @@ export function isLotConsumption(c: ClassifiedTx): boolean {
     return c.assetOut !== undefined;
   }
   return false;
+}
+
+/**
+ * Whether a classified tx is a vault WITHDRAW (surrender share, receive
+ * underlying). The gain on a vault withdraw is realized interest income,
+ * not a capital gain — added 2026-06-14 per Quan feedback.
+ *
+ * Symmetric to isAcquisition: a vault event with `vaultAddress` set is
+ * either a DEPOSIT (assetIn is the share) or a WITHDRAW (assetOut is the
+ * share, or assetIn is the underlying).
+ */
+export function isVaultWithdraw(c: ClassifiedTx): boolean {
+  if (c.vaultAddress === undefined) return false;
+  if (c.type !== 'YIELD') return false;
+  if (c.assetOut === undefined) return false;
+  // assetOut is the share (USDyc) being surrendered.
+  return VAULT_SHARE_SYMBOLS.has(c.assetOut.symbol) || VAULT_SHARE_SYMBOLS.has(c.assetIn?.symbol ?? '');
+}
+
+/**
+ * Discriminate a vault event as DEPOSIT (received shares) or WITHDRAW
+ * (surrendered shares), based on which leg is the share token. Returns
+ * null when the event isn't a vault event at all.
+ *
+ * Why the share-position check: a real-world DEPOSIT classifies as YIELD
+ * with BOTH assetIn (shares received) and assetOut (underlying sent);
+ * a WITHDRAW classifies as YIELD with BOTH assetIn (underlying received)
+ * and assetOut (shares sent). The share symbol is the discriminator.
+ *
+ * Used by CSV exporters to label vault DEPOSIT rows as 'deposit' (not
+ * 'income') and WITHDRAW rows as 'transfer' (not 'income'). Added
+ * 2026-06-14 per Quan feedback.
+ */
+export function classifyVaultAction(c: ClassifiedTx): 'DEPOSIT' | 'WITHDRAW' | null {
+  if (c.vaultAddress === undefined) return null;
+  if (c.type !== 'YIELD') return null;
+  // DEPOSIT: the share is the incoming leg.
+  if (c.assetIn !== undefined && VAULT_SHARE_SYMBOLS.has(c.assetIn.symbol)) {
+    return 'DEPOSIT';
+  }
+  // WITHDRAW: the share is the outgoing leg.
+  if (c.assetOut !== undefined && VAULT_SHARE_SYMBOLS.has(c.assetOut.symbol)) {
+    return 'WITHDRAW';
+  }
+  return null;
+}
+
+/**
+ * Whether a classified tx is a staking-reward YIELD (pure income, no
+ * acquisition of a vault share, no disposal). These legitimately count
+ * toward `yieldMicroUsdTotal`. The vault DEPOSIT case (YIELD +
+ * vaultAddress + assetIn=share) is NOT a staking reward — it's a deposit.
+ * Added 2026-06-14 to fix the bug where vault DEPOSITs were double-counted
+ * as both an acquisition and a yield event.
+ */
+export function isStakingRewardYield(c: ClassifiedTx): boolean {
+  if (c.type !== 'YIELD') return false;
+  if (c.vaultAddress !== undefined) return false;
+  // No assetOut, has assetIn → pure income (e.g. GoodDollar claim, staking claim).
+  return c.assetIn !== undefined && c.assetOut === undefined;
 }
 
 /** Whether a classified tx is a pure gas event (no asset leg). */

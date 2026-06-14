@@ -19,6 +19,8 @@ import {
   isAcquisition,
   isGas,
   isLotConsumption,
+  isStakingRewardYield,
+  isVaultWithdraw,
   lotFromAcquisition,
   lotKey,
   lotPricePerUnitUsd,
@@ -39,6 +41,8 @@ export function computeLifo(input: LifoInput): EngineResult {
   let yieldMicroUsdTotal = 0n;
   const incomeMicroUsdByYear: Record<number, bigint> = {};
   const yieldMicroUsdByYear: Record<number, bigint> = {};
+  let interestEarnedMicroUsdTotal = 0n;
+  const interestEarnedMicroUsdByYear: Record<number, bigint> = {};
   let gasMicroUsdTotal = 0n;
   const priceGaps: { asset: string; timestamp: Timestamp }[] = [];
 
@@ -65,7 +69,9 @@ export function computeLifo(input: LifoInput): EngineResult {
         const y = new Date(c.timestamp * 1000).getUTCFullYear();
         incomeMicroUsdByYear[y] = (incomeMicroUsdByYear[y] ?? 0n) + lot.costBasisMicroUsd;
       }
-      if (c.type === 'YIELD') {
+      // Fix 2026-06-14: only non-vault staking-reward YIELD counts as yield.
+      // See fifo.ts for full rationale.
+      if (isStakingRewardYield(c)) {
         yieldMicroUsdTotal += lot.costBasisMicroUsd;
         const y = new Date(c.timestamp * 1000).getUTCFullYear();
         yieldMicroUsdByYear[y] = (yieldMicroUsdByYear[y] ?? 0n) + lot.costBasisMicroUsd;
@@ -82,6 +88,21 @@ export function computeLifo(input: LifoInput): EngineResult {
       let remaining = BigInt(c.assetOut.amount);
       const priceUsd = c.assetIn?.priceUsd ?? c.assetOut.priceUsd;
       const priceMicro = BigInt(Math.round(priceUsd * 1_000_000));
+      // Vault withdraw gains → interestEarned; non-vault disposals → realizedPnl.
+      const category: Disposal['category'] = isVaultWithdraw(c)
+        ? 'INTEREST_EARNED'
+        : 'CAPITAL_GAIN';
+      // Proceeds at the event level — see fifo.ts for the NAV!=1 rationale.
+      const hasIncomingValue = c.assetIn !== undefined && c.assetIn.amount !== '0';
+      let totalProceedsMicro = 0n;
+      if (hasIncomingValue) {
+        const inSymbol = c.assetIn!.symbol;
+        const inDecimals = decimalsBySymbol[inSymbol] ?? 18;
+        const inDecimalsAdj = BigInt(10) ** BigInt(inDecimals);
+        const inPriceMicro = BigInt(Math.round(c.assetIn!.priceUsd * 1_000_000));
+        totalProceedsMicro = (inPriceMicro * BigInt(c.assetIn!.amount)) / inDecimalsAdj;
+      }
+      let proceedsAllocated = 0n;
 
       // Walk the LIFO queue from the back (newest lot first).
       while (remaining > 0n && queue.length > 0) {
@@ -90,7 +111,18 @@ export function computeLifo(input: LifoInput): EngineResult {
 
         // All in REAL micro-USD (1e-6 precision).
         const costBasisConsumedMicro = (back.costBasisMicroUsd * take) / back.amount;
-        const proceedsConsumedMicro = (priceMicro * take) / decimalsAdj;
+        let proceedsConsumedMicro: bigint;
+        if (hasIncomingValue) {
+          if (remaining - take === 0n) {
+            proceedsConsumedMicro = totalProceedsMicro - proceedsAllocated;
+          } else {
+            proceedsConsumedMicro =
+              (totalProceedsMicro * take) / BigInt(c.assetOut.amount);
+          }
+          proceedsAllocated += proceedsConsumedMicro;
+        } else {
+          proceedsConsumedMicro = (priceMicro * take) / decimalsAdj;
+        }
         const gainMicro = proceedsConsumedMicro - costBasisConsumedMicro;
 
         const lotPriceUsd = lotPricePerUnitUsd(back);
@@ -106,8 +138,15 @@ export function computeLifo(input: LifoInput): EngineResult {
           disposalPriceUsd: priceUsd,
           lotPriceUsd,
           timestamp: c.timestamp,
+          category,
         });
-        updatePnl(symbol, gainMicro);
+        if (category === 'INTEREST_EARNED') {
+          interestEarnedMicroUsdTotal += gainMicro;
+          const y = new Date(c.timestamp * 1000).getUTCFullYear();
+          interestEarnedMicroUsdByYear[y] = (interestEarnedMicroUsdByYear[y] ?? 0n) + gainMicro;
+        } else {
+          updatePnl(symbol, gainMicro);
+        }
 
         if (take === back.amount) {
           queue.pop();
@@ -142,6 +181,8 @@ export function computeLifo(input: LifoInput): EngineResult {
     yieldMicroUsdTotal,
     incomeMicroUsdByYear,
     yieldMicroUsdByYear,
+    interestEarnedMicroUsdTotal,
+    interestEarnedMicroUsdByYear,
     gasMicroUsdTotal,
     priceGaps,
   };

@@ -97,20 +97,23 @@ pnpm dev --address 0xBE19FF9839f6eEe1255F7461443aE7d987D8077c \
          --jurisdiction KE --tax-year 2024
 ```
 
-**Output (excerpt):**
+**Output (excerpt — post Quan feedback 2026-06-14, interest-earned fix):**
 ```
 - **Jurisdiction:** KE
 - **Tax year:** 2024
 - **Txns (raw):** 8
 - **Classified:** 8 (3 rules, 1 rule-protocol, 0 LLM)
 - **Flagged for review:** 0
-- **Duration:** 339ms
+- **Duration:** 144ms
 
 ## 2024 tax summary
 - **Realized gains:** $0.00
 - **Income:** $0.00
-- **Yield:** $5374.90
+- **Yield:** $0.00
+- **Interest earned:** $0.00       (NEW — vault withdraw gains)
 - **Taxable income:** $0.00
+
+Open vault position: 5,374.90 USDyc @ $5,374.90 cost basis @ 0x2a68c98b…3443f
 ```
 
 **Key tx (decoded):**
@@ -118,12 +121,14 @@ pnpm dev --address 0xBE19FF9839f6eEe1255F7461443aE7d987D8077c \
 - Classified: `YIELD` với `vaultAddress: 0x2a68c98b…3443f`
 - Notes: `ERC4626:DEPOSIT (deposit/mint)`
 
-**CSV row (KRA schema):**
-| tx_date | type | asset | amount | price_kes | income_kes | notes |
-|---|---|---|---|---|---|---|
-| 2024-12-31 | income | USDyc | 5,374,900,000 | 130.00 | 698,737,000,000.00 | `ERC4626:DEPOSIT (deposit/mint)` |
+**CSV row (KRA schema — new `deposit` label + `interest_earned_kes` column):**
+| tx_date | type | asset | amount | price_kes | income_kes | interest_earned_kes | notes |
+|---|---|---|---|---|---|---|---|
+| 2024-12-31 | **deposit** | USDyc | 5,374,900,000 | 130.00 | **0.00** | 0.00 | `ERC4626:DEPOSIT (deposit/mint)` |
 
-**Tại sao quan trọng:** ERC-4626 vault decoder (Wave 3) hoạt động đúng — vault deposit được phân loại YIELD chứ không phải INTERACTION, có `vaultAddress` để downstream PNL engine dùng per-vault lot key.
+(Pre-fix: this row showed `type=income` with `income_kes=698,737,000,000.00` — incorrectly treating a $5,374.90 deposit as $5,374.90 of yield income. The deposit is now correctly labeled `deposit` with $0 income. Interest will surface in `interest_earned_kes` when the user WITHDRAWs at a gain.)
+
+**Tại sao quan trọng:** ERC-4626 vault decoder (Wave 3) hoạt động đúng — vault deposit được phân loại YIELD + `vaultAddress` để downstream PNL engine dùng per-vault lot key. **Wave 3.1 (Quan feedback 2026-06-14):** deposit/withdraw gain routing fix — DEPOSIT is acquisition (no income), WITHDRAW gain is interest income, reinvestment updates cost basis correctly. Pinned by the new test in `tests/unit/pnl-calculator.test.ts:533` (Quan's exact 5K→5.3K→5.3K→6K spec).
 
 ### Example 2: DeFi wallet NG 2024 (0x9b33…1394)
 

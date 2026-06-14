@@ -285,17 +285,19 @@ function renderPnl(result: PipelineResult): string {
   lines.push(`- Cost basis method: \`${p.method}\``);
   lines.push(`- Income total: $${p.incomeTotal.toFixed(2)}`);
   lines.push(`- Yield total: $${p.yieldTotal.toFixed(2)}`);
+  lines.push(`- Interest earned total: $${p.interestEarnedTotal.toFixed(2)}`);
   lines.push('');
   lines.push('## Per-year summaries', '');
   if (p.taxYears.length === 0) {
     lines.push('_No tax years computed._');
   } else {
-    lines.push('| Year | Realized | Income | Yield | Deductible gas | Taxable income |');
-    lines.push('|---|---|---|---|---|---|');
+    lines.push('| Year | Realized | Income | Yield | Interest earned | Deductible gas | Taxable income |');
+    lines.push('|---|---|---|---|---|---|---|');
     for (const y of p.taxYears) {
       lines.push(
         `| ${y.year} | $${y.realizedGains.toFixed(2)} | $${y.income.toFixed(2)} | ` +
-          `$${y.yield.toFixed(2)} | $${y.deductibleGas.toFixed(2)} | ` +
+          `$${y.yield.toFixed(2)} | $${y.interestEarned.toFixed(2)} | ` +
+          `$${y.deductibleGas.toFixed(2)} | ` +
           `**$${y.taxableIncome.toFixed(2)}** |`,
       );
     }

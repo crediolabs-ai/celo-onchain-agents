@@ -90,6 +90,7 @@ export async function computePnl(
     unrealizedPnlByAsset: computeUnrealized(engine, input.taxYear),
     incomeTotal: microToUsd(engine.incomeMicroUsdTotal),
     yieldTotal: microToUsd(engine.yieldMicroUsdTotal),
+    interestEarnedTotal: microToUsd(engine.interestEarnedMicroUsdTotal),
     priceGaps: engine.priceGaps,
     methodJurisdictionCompat: compat,
     disposals: engine.disposals,
@@ -114,14 +115,23 @@ function computeUnrealized(
   return {};
 }
 
-/** Bucket income/yield/gain/gas into per-calendar-year summaries.
+/** Bucket income/yield/interest/gain/gas into per-calendar-year summaries.
  *
- *  Income and yield are now tracked per-year inside the engine (see
- *  `incomeMicroUsdByYear` / `yieldMicroUsdByYear` on `EngineResult`), so a
- *  2024 deposit is credited to the 2024 summary, not the user's currently-
- *  requested year. Gas and realized gains remain engine-wide placeholders
- *  (gas micro-USD is not threaded through `ClassifiedTx` yet; the gain
- *  per-disposal year-bucketing below is still in place).
+ *  Income, yield, and interestEarned are tracked per-year inside the engine
+ *  (see `incomeMicroUsdByYear` / `yieldMicroUsdByYear` /
+ *  `interestEarnedMicroUsdByYear` on `EngineResult`), so a 2024 deposit is
+ *  credited to the 2024 summary, not the user's currently-requested year.
+ *  Realized capital gains are bucketed per-disposal from the disposals array
+ *  (this preserves correct per-year attribution across partial lot disposals).
+ *  Gas is engine-wide (still a placeholder — see TODO in fifo.ts:160).
+ *
+ *  Taxable income formula:
+ *    = income + yield + interestEarned + realizedGains - deductibleGas.
+ *  Fix 2026-06-14: the previous formula dropped `yield` and `interestEarned`
+ *  on the floor — for a KE 0xBE19-style wallet that deposited into a vault
+ *  and never withdrew, the report showed `Yield: $5,374.90, Taxable income:
+ *  $0.00` — internally inconsistent. The yield/interest now feed into the
+ *  taxable line so the report is consistent.
  */
 function bucketByYear(
   engine: EngineResult,
@@ -136,6 +146,7 @@ function bucketByYear(
         realizedGains: 0,
         income: 0,
         yield: 0,
+        interestEarned: 0,
         deductibleGas: 0,
         taxableIncome: 0,
       };
@@ -146,7 +157,13 @@ function bucketByYear(
   for (const d of engine.disposals) {
     const year = new Date(d.timestamp * 1000).getUTCFullYear();
     const summary = ensure(year);
-    summary.realizedGains += Number(d.gainMicroUsd) / 1_000_000;
+    // Vault withdraws route to interestEarned per disposal.category. Capital
+    // gains (TRANSFER_OUT / SWAP) land in realizedGains as before.
+    if (d.category === 'INTEREST_EARNED') {
+      summary.interestEarned += Number(d.gainMicroUsd) / 1_000_000;
+    } else {
+      summary.realizedGains += Number(d.gainMicroUsd) / 1_000_000;
+    }
   }
 
   // Income + yield: walk the per-year maps the engine populated. The
@@ -167,7 +184,11 @@ function bucketByYear(
   requested.deductibleGas = Number(engine.gasMicroUsdTotal) / 1_000_000;
   for (const summary of Object.values(totalsByYear)) {
     summary.taxableIncome =
-      summary.income + summary.realizedGains - summary.deductibleGas;
+      summary.income +
+      summary.yield +
+      summary.interestEarned +
+      summary.realizedGains -
+      summary.deductibleGas;
   }
 
   return Object.values(totalsByYear).sort((a, b) => a.year - b.year);

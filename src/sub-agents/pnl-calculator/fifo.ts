@@ -21,6 +21,8 @@ import {
   isAcquisition,
   isGas,
   isLotConsumption,
+  isStakingRewardYield,
+  isVaultWithdraw,
   lotFromAcquisition,
   lotKey,
   lotPricePerUnitUsd,
@@ -51,6 +53,8 @@ export function computeFifo(input: FifoInput): EngineResult {
   let yieldMicroUsdTotal = 0n;
   const incomeMicroUsdByYear: Record<number, bigint> = {};
   const yieldMicroUsdByYear: Record<number, bigint> = {};
+  let interestEarnedMicroUsdTotal = 0n;
+  const interestEarnedMicroUsdByYear: Record<number, bigint> = {};
   let gasMicroUsdTotal = 0n;
   const priceGaps: { asset: string; timestamp: Timestamp }[] = [];
 
@@ -79,7 +83,15 @@ export function computeFifo(input: FifoInput): EngineResult {
         const y = new Date(c.timestamp * 1000).getUTCFullYear();
         incomeMicroUsdByYear[y] = (incomeMicroUsdByYear[y] ?? 0n) + lot.costBasisMicroUsd;
       }
-      if (c.type === 'YIELD') {
+      // Yield bucket: only non-vault staking-reward YIELD counts as yield
+      // income. A vault DEPOSIT (YIELD + vaultAddress) is an acquisition of
+      // a share — its cost basis is the lot, not income. The income is
+      // realized only at the matching vault WITHDRAW, where the gain
+      // routes to `interestEarnedMicroUsdTotal` (see disposal branch below).
+      // Fix 2026-06-14: previous behavior added the deposit amount to yield,
+      // inflating the yield line for any vault user (e.g. KE 0xBE19 showed
+      // $5,374.90 yield for a single $5,374.90 deposit with no disposals).
+      if (isStakingRewardYield(c)) {
         yieldMicroUsdTotal += lot.costBasisMicroUsd;
         const y = new Date(c.timestamp * 1000).getUTCFullYear();
         yieldMicroUsdByYear[y] = (yieldMicroUsdByYear[y] ?? 0n) + lot.costBasisMicroUsd;
@@ -101,6 +113,30 @@ export function computeFifo(input: FifoInput): EngineResult {
       // fall back to assetOut price for non-vault disposals.
       const priceUsd = c.assetIn?.priceUsd ?? c.assetOut.priceUsd;
       const priceMicro = BigInt(Math.round(priceUsd * 1_000_000));
+      // Vault withdraw gains are interest income, not capital gains. The
+      // gain between the share's cost basis (lot) and the underlying
+      // received (assetIn) is what the vault strategy earned as yield.
+      // Fix 2026-06-14: previously these gains landed in realizedPnl,
+      // conflating interest with capital gains.
+      const category: Disposal['category'] = isVaultWithdraw(c)
+        ? 'INTEREST_EARNED'
+        : 'CAPITAL_GAIN';
+      // Proceeds at the event level. For vault WITHDRAW / SWAP, the user
+      // received an actual value (assetIn) — proceeds are that value, NOT
+      // the share's notional price × share amount. The previous formula
+      // (priceMicro × assetOut.amount / decimals) only worked when NAV=1.0;
+      // Quan 2026-06-14: a 5K deposit withdrawing 5.3K should report $300
+      // interest, not $0.
+      const hasIncomingValue = c.assetIn !== undefined && c.assetIn.amount !== '0';
+      let totalProceedsMicro = 0n;
+      if (hasIncomingValue) {
+        const inSymbol = c.assetIn!.symbol;
+        const inDecimals = decimalsBySymbol[inSymbol] ?? 18;
+        const inDecimalsAdj = BigInt(10) ** BigInt(inDecimals);
+        const inPriceMicro = BigInt(Math.round(c.assetIn!.priceUsd * 1_000_000));
+        totalProceedsMicro = (inPriceMicro * BigInt(c.assetIn!.amount)) / inDecimalsAdj;
+      }
+      let proceedsAllocated = 0n;
 
       // Walk the FIFO queue from the front.
       while (remaining > 0n && queue.length > 0) {
@@ -109,7 +145,23 @@ export function computeFifo(input: FifoInput): EngineResult {
 
         // All in REAL micro-USD (1e-6 precision).
         const costBasisConsumedMicro = (front.costBasisMicroUsd * take) / front.amount;
-        const proceedsConsumedMicro = (priceMicro * take) / decimalsAdj;
+        let proceedsConsumedMicro: bigint;
+        if (hasIncomingValue) {
+          // Proportional attribution to take / total assetOut.amount. The
+          // last lot takes the remainder so the sum is exactly totalProceeds
+          // (no rounding loss across many partials).
+          if (remaining - take === 0n) {
+            proceedsConsumedMicro = totalProceedsMicro - proceedsAllocated;
+          } else {
+            proceedsConsumedMicro =
+              (totalProceedsMicro * take) / BigInt(c.assetOut.amount);
+          }
+          proceedsAllocated += proceedsConsumedMicro;
+        } else {
+          // Pure outflow (TRANSFER_OUT) — use notional market value of
+          // disposed shares. No incoming value to attribute to.
+          proceedsConsumedMicro = (priceMicro * take) / decimalsAdj;
+        }
         const gainMicro = proceedsConsumedMicro - costBasisConsumedMicro;
 
         const lotPriceUsd = lotPricePerUnitUsd(front);
@@ -125,8 +177,15 @@ export function computeFifo(input: FifoInput): EngineResult {
           disposalPriceUsd: priceUsd,
           lotPriceUsd,
           timestamp: c.timestamp,
+          category,
         });
-        updatePnl(symbol, gainMicro);
+        if (category === 'INTEREST_EARNED') {
+          interestEarnedMicroUsdTotal += gainMicro;
+          const y = new Date(c.timestamp * 1000).getUTCFullYear();
+          interestEarnedMicroUsdByYear[y] = (interestEarnedMicroUsdByYear[y] ?? 0n) + gainMicro;
+        } else {
+          updatePnl(symbol, gainMicro);
+        }
 
         // Update or remove the front lot.
         if (take === front.amount) {
@@ -178,6 +237,8 @@ export function computeFifo(input: FifoInput): EngineResult {
     yieldMicroUsdTotal,
     incomeMicroUsdByYear,
     yieldMicroUsdByYear,
+    interestEarnedMicroUsdTotal,
+    interestEarnedMicroUsdByYear,
     gasMicroUsdTotal,
     priceGaps,
   };

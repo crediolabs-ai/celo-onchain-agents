@@ -116,6 +116,18 @@ function formatResult(r: PipelineResult, args: ParsedArgs): string {
   lines.push(`- **Txns (raw):** ${r.fetched.rawTxns.length}`);
   lines.push(`- **Txns (token transfers):** ${r.fetched.tokenTransfers.length}`);
   lines.push(`- **Txns (internal):** ${r.fetched.internalTxns.length}`);
+  // Fix 2026-06-14 (Quan feedback): surface the pagination cap so the
+  // user knows when txs are missing, not silently dropped. Re-run
+  // with --max-pages higher to extend, or accept truncation.
+  if (!r.fetched.paginationComplete) {
+    lines.push('');
+    lines.push(
+      '> ⚠️  **Pagination incomplete** — Celoscan\'s `page × offset ≤ 10_000` ' +
+      'cap was hit. Some transactions were not fetched. The pipeline is ' +
+      'otherwise complete; consider raising `MAX_PAGES` in the fetcher ' +
+      'config if you need a full history.',
+    );
+  }
   lines.push(
     `- **Classified:** ${r.classified.classified.length} ` +
       `(${r.classified.ruleHits} rules, ` +
@@ -139,6 +151,7 @@ function formatResult(r: PipelineResult, args: ParsedArgs): string {
     lines.push(`- **Realized gains:** $${yr.realizedGains.toFixed(2)}`);
     lines.push(`- **Income:** $${yr.income.toFixed(2)}`);
     lines.push(`- **Yield:** $${yr.yield.toFixed(2)}`);
+    lines.push(`- **Interest earned:** $${yr.interestEarned.toFixed(2)}`);
     lines.push(`- **Deductible gas:** $${yr.deductibleGas.toFixed(2)}`);
     lines.push(`- **Taxable income:** $${yr.taxableIncome.toFixed(2)}`);
   }

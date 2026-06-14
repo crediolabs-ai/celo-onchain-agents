@@ -41,11 +41,12 @@ function mkPnl(taxableIncome: number): PnlOutput {
   return {
     address: ADDR,
     method: 'FIFO',
-    taxYears: [{ year: 2024, realizedGains: 0, income: 0, yield: 0, deductibleGas: 0, taxableIncome }],
+    taxYears: [{ year: 2024, realizedGains: 0, income: 0, yield: 0, interestEarned: 0, deductibleGas: 0, taxableIncome }],
     realizedPnlByAsset: {},
     unrealizedPnlByAsset: {},
     incomeTotal: 0,
     yieldTotal: 0,
+    interestEarnedTotal: 0,
     priceGaps: [],
     methodJurisdictionCompat: [],
     disposals: [],

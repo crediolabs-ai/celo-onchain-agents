@@ -211,17 +211,27 @@ export interface PnlInput {
 /**
  * Per-tax-year summary.
  *
- * `taxableIncome` semantics: `= income + realizedGains - deductibleGas`.
- * NG FIRS and KE KRA both tax income + capital gains; gas is deductible
- * against gains. The CSV exporter relies on this contract. Addition #4.
+ * `taxableIncome` semantics:
+ *   = income + yield + interestEarned + realizedGains - deductibleGas.
+ * NG FIRS, KE KRA, and OECD CARF all tax ordinary income (airdrop /
+ * staking / Moola interest) + capital gains (disposals) + interest earned
+ * on vault withdraws as a single pool. Gas is deductible against gains.
+ * The CSV exporter relies on this contract. Addition #4; amended 2026-06-14
+ * to add `yield` and `interestEarned` to the formula (Quan feedback — the
+ * old formula dropped yield and interest into the void).
  */
 export interface TaxYearSummary {
   year: number;
+  /** Realized capital gains from disposals (TRANSFER_OUT, SWAP). */
   realizedGains: number;
+  /** Income from INCOME-type events (airdrops, claims). */
   income: number;
+  /** Income from non-vault YIELD events (staking rewards, Moola interest). */
   yield: number;
+  /** Realized interest income from vault withdraws (proceeds - cost basis on share disposal). */
+  interestEarned: number;
   deductibleGas: number;
-  /** = income + realizedGains - deductibleGas. See interface-contract amendment #4. */
+  /** = income + yield + interestEarned + realizedGains - deductibleGas. */
   taxableIncome: number;
 }
 
@@ -243,6 +253,14 @@ export interface PnlOutput {
   unrealizedPnlByAsset: Record<string, number>;
   incomeTotal: number;
   yieldTotal: number;
+  /**
+   * Realized interest income from vault withdraws (proceeds - cost basis on
+   * share disposal). Distinct from `yieldTotal` (non-vault staking rewards)
+   * and `realizedPnlByAsset` (capital gains on TRANSFER_OUT / SWAP).
+   * Added 2026-06-14 per Quan feedback — vault DEPOSIT must NOT count as
+   * income; interest is realized only at WITHDRAW.
+   */
+  interestEarnedTotal: number;
   /** Asset/timestamp pairs where no historical price was available — surfaces in CSV. */
   priceGaps: { asset: string; timestamp: Timestamp }[];
   /** Addition #5: one entry per (method, jurisdiction) the user might pick. */
@@ -255,6 +273,13 @@ export interface PnlOutput {
    */
   disposals: readonly Disposal[];
 }
+
+/**
+ * Categorizes a disposal for tax-authority reporting. Added 2026-06-14 per
+ * Quan feedback — interest earned (vault withdraw) and capital gains
+ * (TRANSFER_OUT / SWAP) must surface in separate CSV columns.
+ */
+export type DisposalCategory = 'CAPITAL_GAIN' | 'INTEREST_EARNED';
 
 /** A single asset disposal from the PNL engine. */
 export interface Disposal {
@@ -275,6 +300,12 @@ export interface Disposal {
   /** Token's price at acquisition time of the consumed lot (USD per token, decimal). */
   lotPriceUsd: number;
   timestamp: Timestamp;
+  /**
+   * Bucket for tax-authority reporting. 'INTEREST_EARNED' = vault withdraw
+   * (gain is yield the strategy earned). 'CAPITAL_GAIN' = TRANSFER_OUT /
+   * SWAP / non-vault disposal. Added 2026-06-14.
+   */
+  category: DisposalCategory;
 }
 
 /** CSV exporter input. */

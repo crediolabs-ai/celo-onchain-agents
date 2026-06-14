@@ -20,6 +20,8 @@ import {
   isAcquisition,
   isGas,
   isLotConsumption,
+  isStakingRewardYield,
+  isVaultWithdraw,
   lotKey,
   lotPricePerUnitUsd,
 } from './engine.js';
@@ -51,6 +53,8 @@ export function computeWac(input: WacInput): EngineResult {
   let yieldMicroUsdTotal = 0n;
   const incomeMicroUsdByYear: Record<number, bigint> = {};
   const yieldMicroUsdByYear: Record<number, bigint> = {};
+  let interestEarnedMicroUsdTotal = 0n;
+  const interestEarnedMicroUsdByYear: Record<number, bigint> = {};
   let gasMicroUsdTotal = 0n;
   const priceGaps: { asset: string; timestamp: Timestamp }[] = [];
 
@@ -98,7 +102,9 @@ export function computeWac(input: WacInput): EngineResult {
         const y = new Date(c.timestamp * 1000).getUTCFullYear();
         incomeMicroUsdByYear[y] = (incomeMicroUsdByYear[y] ?? 0n) + costMicro;
       }
-      if (c.type === 'YIELD') {
+      // Fix 2026-06-14: only non-vault staking-reward YIELD counts as yield.
+      // See fifo.ts for full rationale.
+      if (isStakingRewardYield(c)) {
         yieldMicroUsdTotal += costMicro;
         const y = new Date(c.timestamp * 1000).getUTCFullYear();
         yieldMicroUsdByYear[y] = (yieldMicroUsdByYear[y] ?? 0n) + costMicro;
@@ -127,12 +133,30 @@ export function computeWac(input: WacInput): EngineResult {
       // losing precision to integer truncation. costBasisConsumedMicro is
       // in real micro-USD.
       const costBasisConsumedMicro = (cur.costBasisMicroUsd * take) / cur.amount;
-      // Proceeds: (micro-USD-per-token × wei) ÷ decimalsAdj → real micro-USD.
-      const proceedsConsumedMicro = (priceMicro * take) / decimalsAdj;
-      const gainMicro = proceedsConsumedMicro - costBasisConsumedMicro;
       const remainingAmount = cur.amount - take;
       const remainingCost = cur.costBasisMicroUsd - costBasisConsumedMicro;
       const lotPriceUsd = lotPricePerUnitUsd(cur);
+      // Vault withdraw gains → interestEarned; non-vault disposals → realizedPnl.
+      const category: Disposal['category'] = isVaultWithdraw(c)
+        ? 'INTEREST_EARNED'
+        : 'CAPITAL_GAIN';
+      // Proceeds at the event level — see fifo.ts for the NAV!=1 rationale.
+      // WAC disposes in a single take from the running-average pool, so the
+      // proportional attribution simplifies to "proceeds = incoming value
+      // for vault withdraw, otherwise notional".
+      let proceedsConsumedMicro: bigint;
+      const hasIncomingValue = c.assetIn !== undefined && c.assetIn.amount !== '0';
+      if (hasIncomingValue) {
+        const inSymbol = c.assetIn!.symbol;
+        const inDecimals = decimalsBySymbol[inSymbol] ?? 18;
+        const inDecimalsAdj = BigInt(10) ** BigInt(inDecimals);
+        const inPriceMicro = BigInt(Math.round(c.assetIn!.priceUsd * 1_000_000));
+        proceedsConsumedMicro =
+          (inPriceMicro * BigInt(c.assetIn!.amount)) / inDecimalsAdj;
+      } else {
+        proceedsConsumedMicro = (priceMicro * take) / decimalsAdj;
+      }
+      const gainMicro = proceedsConsumedMicro - costBasisConsumedMicro;
 
       disposals.push({
         amount: take,
@@ -145,8 +169,15 @@ export function computeWac(input: WacInput): EngineResult {
         disposalPriceUsd: priceUsd,
         lotPriceUsd,
         timestamp: c.timestamp,
+        category,
       });
-      updatePnl(symbol, gainMicro);
+      if (category === 'INTEREST_EARNED') {
+        interestEarnedMicroUsdTotal += gainMicro;
+        const y = new Date(c.timestamp * 1000).getUTCFullYear();
+        interestEarnedMicroUsdByYear[y] = (interestEarnedMicroUsdByYear[y] ?? 0n) + gainMicro;
+      } else {
+        updatePnl(symbol, gainMicro);
+      }
 
       // If the disposal exceeds our pool, surface a price gap (parity with FIFO/LIFO).
       if (sellAmount > cur.amount) {
@@ -208,6 +239,8 @@ export function computeWac(input: WacInput): EngineResult {
     yieldMicroUsdTotal,
     incomeMicroUsdByYear,
     yieldMicroUsdByYear,
+    interestEarnedMicroUsdTotal,
+    interestEarnedMicroUsdByYear,
     gasMicroUsdTotal,
     priceGaps,
   };

@@ -71,7 +71,9 @@ export function exportCsv(input: CsvExportInput): CsvExportResult {
       break;
     }
     case 'KE': {
-      const keRows = buildKenyaKraRows(classified);
+      // pnl is passed so vault WITHDRAW interest gains surface in the
+      // `interest_earned_kes` column. Added 2026-06-14 (Quan feedback).
+      const keRows = buildKenyaKraRows(classified, pnl);
       csv = renderKenyaKraCsv(keRows);
       rowCount = keRows.length;
       break;

@@ -147,6 +147,7 @@ function execYearSummary(
       realizedGains: summary.realizedGains,
       income: summary.income,
       yield: summary.yield,
+      interestEarned: summary.interestEarned,
       deductibleGas: summary.deductibleGas,
     },
     answer:
@@ -154,6 +155,7 @@ function execYearSummary(
       `(realized gains $${summary.realizedGains.toFixed(2)}, ` +
       `income $${summary.income.toFixed(2)}, ` +
       `yield $${summary.yield.toFixed(2)}, ` +
+      `interest earned $${summary.interestEarned.toFixed(2)}, ` +
       `deductible gas $${summary.deductibleGas.toFixed(2)}).`,
     citedTxHashes: cited,
   };
