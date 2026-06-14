@@ -297,6 +297,25 @@ export function computeYieldRoundTripAdjustments(
     }
 
     if (outUsd > 0) {
+      // Sanity check: the matched OUT should be a meaningful portion of
+      // the IN. If the OUT is much smaller than the IN, the OUT and IN
+      // are likely from different yield-protocol positions — e.g. the
+      // 0x4aaa NG 2024 wallet has a 5,000 USDC deposit to a yield
+      // protocol in May AND a 16,124.70 USDC YIELD-IN in December. The
+      // 5,000 OUT belongs to a smaller separate position; the
+      // 16,124.70 IN is gross yield from a larger position whose
+      // original deposit is not in this wallet's history. Without this
+      // check, the engine would treat the 5,000 as the cost basis and
+      // report $11,114.83 of phantom interest.
+      //
+      // Threshold 0.5: a round-trip with <50% ratio implies wildly
+      // different sizes and is almost certainly a position-mismatch
+      // (typical DeFi yields keep this ratio in the 0.8–0.999 range;
+      // the 0xBE19 KE 2024 case is 0.93).
+      const ratio = outUsd / inUsd;
+      if (ratio < 0.5) {
+        continue;
+      }
       const gain = inUsd - outUsd;
       yieldReductionByYear.set(txYear, (yieldReductionByYear.get(txYear) ?? 0) + inUsd);
       interestEarnedByYear.set(txYear, (interestEarnedByYear.get(txYear) ?? 0) + gain);

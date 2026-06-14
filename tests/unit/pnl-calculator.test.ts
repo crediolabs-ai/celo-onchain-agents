@@ -938,4 +938,26 @@ describe('computeYieldRoundTripAdjustments', () => {
     expect(out.yieldReductionByYear.get(2024)).toBeCloseTo(5374.90, 4);
     expect(out.interestEarnedByYear.get(2024)).toBeCloseTo(-625.10, 4);
   });
+
+  it('skips the round-trip when the matched OUT is much smaller than the IN (0x4aaa NG 2024 case)', () => {
+    // Scenario mirrors 0x4aaa76aB12bA7525C9E488E771C67d0BB99BfF70 (NG 2024):
+    //   May 6:  OUT 5,000 USDC to a yield protocol (smaller position)
+    //   Dec 14: YIELD-IN 16,124.70 USDC from a yield protocol
+    //          (gross return on a LARGER externally-held position)
+    //
+    // Pre-fix bug: matched the 5,000 OUT as the cost basis, produced
+    // $11,114.83 of phantom interest (5,000 × 0.5, then net = 16,114.83
+    // − 5,000 = 11,114.83). The CSV rows all showed interest_earned_ngn
+    // = 0.00, so the summary line and the per-row attribution diverged.
+    // Post-fix: ratio (5,000 / 16,124.70) = 0.31 < 0.5 → skip round-trip.
+    // The YIELD-IN reports as gross yield; interestEarned stays at 0.
+    const SIXTEEN_K_USDC = '16124700000'; // 16,124.70 USDC
+    const out = computeYieldRoundTripAdjustments([
+      transferOut(FIVE_K_USDC, TS_2024_MAY),
+      knownProtocolIn(SIXTEEN_K_USDC, TS_2024_DEC_MID),
+    ]);
+
+    expect(out.yieldReductionByYear.size).toBe(0);
+    expect(out.interestEarnedByYear.size).toBe(0);
+  });
 });
