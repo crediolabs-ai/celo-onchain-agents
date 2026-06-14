@@ -43,6 +43,16 @@ export interface PredicateContext {
   knownContracts: ContractLookup;
   /** Optional jurisdiction hint — rules can filter on this. */
   jurisdiction?: Jurisdiction;
+  /**
+   * Set of tx hashes that represent stablecoin self-funding for a yield
+   * position (USDC/USDT/cUSD IN that the wallet immediately routed to a
+   * known yield-protocol address within the block window).
+   *
+   * Built by `computeSelfFundingForYieldSet` in `../index.ts` and threaded
+   * in via the pre-pass. When absent, the `isInSelfFundingForYieldSet`
+   * predicate always returns false (no false positives on missing data).
+   */
+  selfFundingForYieldSet?: Set<TxHash>;
 }
 
 // ─── Predicate DSL ─────────────────────────────────────────────────────────
@@ -86,7 +96,9 @@ export type Predicate =
   | { kind: 'valueLt'; amount: string }
   // Transaction outcomes
   | { kind: 'isError'; is: boolean }
-  | { kind: 'isContractCreation'; is: boolean };
+  | { kind: 'isContractCreation'; is: boolean }
+  // Self-funding for yield (pre-pass populated in index.ts)
+  | { kind: 'isInSelfFundingForYieldSet' };
 
 // ─── Rule ──────────────────────────────────────────────────────────────────
 
@@ -172,6 +184,9 @@ export function evaluatePredicate(p: Predicate, ctx: PredicateContext): boolean 
 
     case 'isContractCreation':
       return (ctx.tx.to === null) === p.is;
+
+    case 'isInSelfFundingForYieldSet':
+      return ctx.selfFundingForYieldSet?.has(ctx.tx.hash) ?? false;
   }
 }
 

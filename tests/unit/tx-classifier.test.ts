@@ -602,3 +602,214 @@ describe('classifyWithDeps', () => {
     expect(out.classified[0]!.type).toBe('TRANSFER_OUT');
   });
 });
+
+// ─── self-funding for yield (2026-06-14 fix) ───────────────────────────────
+
+const YIELD_POOL = '0x5b7ba6471681c61b4994dc5072b0d0c0ffad4a2b' as Address;
+
+describe('self-funding for yield', () => {
+  it('USDC IN then USDC OUT to yield protocol in same block → IN classified TRANSFER_IN', async () => {
+    // Mirrors 0xBE19 2024-05-13: wallet receives 5,000 USDC, then immediately
+    // routes it to the Karmen Mezz Pool in the same block.
+    const txIn = makeRawTx({
+      hash: '0x' + 'aa'.repeat(32) as TxHash,
+      blockNumber: 1000,
+      from: ADDR_B,               // someone funded the wallet
+      to: ADDR_A,                 // wallet is the recipient
+      value: '0',
+    });
+    const txOut = makeRawTx({
+      hash: '0x' + 'bb'.repeat(32) as TxHash,
+      blockNumber: 1000,           // same block
+      from: ADDR_A,               // wallet sends
+      to: YIELD_POOL,             // to yield protocol
+      value: '0',
+    });
+    const tIn = makeTokenTransfer({
+      hash: txIn.hash,
+      from: ADDR_B,
+      to: ADDR_A,
+      tokenSymbol: 'USDC',
+      value: '5000000000',         // 5,000 USDC (decimals=6)
+    });
+    const tOut = makeTokenTransfer({
+      hash: txOut.hash,
+      from: ADDR_A,
+      to: YIELD_POOL,
+      tokenSymbol: 'USDC',
+      value: '5000000000',
+    });
+    const fetched = makeFetched([txIn, txOut], { tokenTransfers: [tIn, tOut] });
+
+    const out = await classifyWithDeps({ fetched, jurisdiction: 'KE' });
+
+    // txIn should be classified TRANSFER_IN (not INCOME)
+    const classifiedIn = out.classified.find((c) => c.hash === txIn.hash);
+    expect(classifiedIn).toBeDefined();
+    expect(classifiedIn!.type).toBe('TRANSFER_IN');
+    expect(classifiedIn!.classifierSource).toBe('rule');
+    expect(classifiedIn!.confidence).toBe(0.9);
+    // txOut is not matched by any rule in this test setup (DEX/SWAP path
+    // needs toIn router refs which are null in test lookup) — it will be
+    // flagged or LLM'd; the key signal is that txIn is NOT INCOME.
+    expect(classifiedIn!.type).not.toBe('INCOME');
+  });
+
+  it('USDC IN but OUT to yield protocol is outside block window → IN still INCOME', async () => {
+    // The OUT tx is 1001 blocks later — outside the 1000-block window.
+    const txIn = makeRawTx({
+      hash: '0x' + 'aa'.repeat(32) as TxHash,
+      blockNumber: 1000,
+      from: ADDR_B,
+      to: ADDR_A,
+      value: '0',
+    });
+    const txOut = makeRawTx({
+      hash: '0x' + 'bb'.repeat(32) as TxHash,
+      blockNumber: 2001,           // 1001 blocks later — outside 1000-block window
+      from: ADDR_A,
+      to: YIELD_POOL,
+      value: '0',
+    });
+    const tIn = makeTokenTransfer({
+      hash: txIn.hash,
+      from: ADDR_B,
+      to: ADDR_A,
+      tokenSymbol: 'USDC',
+      value: '5000000000',
+    });
+    const tOut = makeTokenTransfer({
+      hash: txOut.hash,
+      from: ADDR_A,
+      to: YIELD_POOL,
+      tokenSymbol: 'USDC',
+      value: '5000000000',
+    });
+    const fetched = makeFetched([txIn, txOut], { tokenTransfers: [tIn, tOut] });
+
+    const out = await classifyWithDeps({ fetched, jurisdiction: 'KE' });
+
+    // txIn should be INCOME (not self-funding — window missed)
+    const classifiedIn = out.classified.find((c) => c.hash === txIn.hash);
+    expect(classifiedIn!.type).toBe('INCOME');
+  });
+
+  it('USDC IN but OUT is non-stable (CELO) → IN still INCOME', async () => {
+    // The OUT transfers CELO, not USDC — not a yield-protocol self-funding.
+    const txIn = makeRawTx({
+      hash: '0x' + 'aa'.repeat(32) as TxHash,
+      blockNumber: 1000,
+      from: ADDR_B,
+      to: ADDR_A,
+      value: '0',
+    });
+    const txOut = makeRawTx({
+      hash: '0x' + 'bb'.repeat(32) as TxHash,
+      blockNumber: 1000,
+      from: ADDR_A,
+      to: YIELD_POOL,
+      value: '1000000000000000000', // 1 CELO out, not a stablecoin
+    });
+    const tIn = makeTokenTransfer({
+      hash: txIn.hash,
+      from: ADDR_B,
+      to: ADDR_A,
+      tokenSymbol: 'USDC',
+      value: '5000000000',
+    });
+    // No token transfer for txOut (native CELO only)
+    const fetched = makeFetched([txIn, txOut], { tokenTransfers: [tIn] });
+
+    const out = await classifyWithDeps({ fetched, jurisdiction: 'KE' });
+
+    // txIn should be INCOME (OUT was not a stablecoin)
+    const classifiedIn = out.classified.find((c) => c.hash === txIn.hash);
+    expect(classifiedIn!.type).toBe('INCOME');
+  });
+
+  it('non-stable IN (CELO) before yield-protocol OUT → CELO IN not matched', async () => {
+    // The IN is CELO, not USDC/USDT/cUSD — no stablecoin funding match.
+    const txIn = makeRawTx({
+      hash: '0x' + 'aa'.repeat(32) as TxHash,
+      blockNumber: 1000,
+      from: ADDR_B,
+      to: ADDR_A,
+      value: '1000000000000000000', // 1 CELO in
+    });
+    const txOut = makeRawTx({
+      hash: '0x' + 'bb'.repeat(32) as TxHash,
+      blockNumber: 1000,
+      from: ADDR_A,
+      to: YIELD_POOL,
+      value: '0',
+    });
+    const tOut = makeTokenTransfer({
+      hash: txOut.hash,
+      from: ADDR_A,
+      to: YIELD_POOL,
+      tokenSymbol: 'USDC',
+      value: '5000000000',
+    });
+    // txIn is a native CELO transfer (no token transfer)
+    const fetched = makeFetched([txIn, txOut], { tokenTransfers: [tOut] });
+
+    const out = await classifyWithDeps({ fetched, jurisdiction: 'KE' });
+
+    // txIn should be TRANSFER_IN (CELO native in) — not self-funding since it was CELO
+    const classifiedIn = out.classified.find((c) => c.hash === txIn.hash);
+    expect(classifiedIn!.type).toBe('TRANSFER_IN');
+    expect(classifiedIn!.classifierSource).toBe('rule');
+  });
+
+  it('yield return IN from 0x5b7ba647… → YIELD, not TRANSFER_IN (rule order matters)', async () => {
+    // The yield.known_protocol_in rule runs BEFORE self_funding rule and
+    // must win on the RETURN leg (funds coming BACK from yield protocol).
+    const txReturn = makeRawTx({
+      hash: '0x' + 'cc'.repeat(32) as TxHash,
+      blockNumber: 2000,
+      from: YIELD_POOL,             // funds come FROM the yield protocol
+      to: ADDR_A,
+      value: '0',
+    });
+    const tReturn = makeTokenTransfer({
+      hash: txReturn.hash,
+      from: YIELD_POOL,
+      to: ADDR_A,
+      tokenSymbol: 'USDC',
+      value: '537490000',           // 537.49 USDC yield return
+    });
+    const fetched = makeFetched([txReturn], { tokenTransfers: [tReturn] });
+
+    const out = await classifyWithDeps({ fetched, jurisdiction: 'KE' });
+
+    // Must be YIELD (from known_protocol_in rule), not TRANSFER_IN
+    const classified = out.classified.find((c) => c.hash === txReturn.hash);
+    expect(classified!.type).toBe('YIELD');
+    expect(classified!.classifierSource).toBe('rule');
+    expect(classified!.notes).toContain('known_protocol_in');
+  });
+
+  it('isInSelfFundingForYieldSet predicate: set membership', () => {
+    const fundingHash = '0x' + 'ab'.repeat(32) as TxHash;
+    const nonFundingHash = '0x' + 'cd'.repeat(32) as TxHash;
+    const ctxIn = makeCtx({
+      tx: makeRawTx({ hash: fundingHash }),
+      selfFundingForYieldSet: new Set([fundingHash]),
+    });
+    const ctxOut = makeCtx({
+      tx: makeRawTx({ hash: nonFundingHash }),
+      selfFundingForYieldSet: new Set([fundingHash]),
+    });
+    const ctxEmpty = makeCtx({
+      tx: makeRawTx({ hash: nonFundingHash }),
+      selfFundingForYieldSet: new Set(),
+    });
+
+    const pred: Predicate = { kind: 'isInSelfFundingForYieldSet' };
+
+    expect(evaluatePredicate(pred, ctxIn)).toBe(true);
+    expect(evaluatePredicate(pred, ctxOut)).toBe(false);
+    // Absent set → false (no false positives on missing data)
+    expect(evaluatePredicate(pred, ctxEmpty)).toBe(false);
+  });
+});

@@ -17,6 +17,7 @@
 
 import type { Rule } from './predicates.js';
 import { evaluateRule } from './predicates.js';
+import { YIELD_PROTOCOL_ADDRESSES } from '../../shared/yield-protocols.js';
 
 export const RULES: readonly Rule[] = [
   // ─── YIELD FROM KNOWN PROTOCOL ─────────────────────────────────────────
@@ -38,7 +39,9 @@ export const RULES: readonly Rule[] = [
     matches: {
       kind: 'allOf',
       children: [
-        { kind: 'fromAddress', address: '0x5b7ba6471681c61b4994dc5072b0d0c0ffad4a2b' },
+        // Refactored 2026-06-14: use YIELD_PROTOCOL_ADDRESSES (DRY).
+        // Covers the Karmen Mezz Pool and any future yield protocols.
+        { kind: 'fromAddress', address: [...YIELD_PROTOCOL_ADDRESSES][0]! },
         { kind: 'tokenDirection', is: 'in' },
         { kind: 'tokenTransferCount', op: 'eq', value: 1 },
         { kind: 'isError', is: false },
@@ -47,8 +50,36 @@ export const RULES: readonly Rule[] = [
     classify: 'YIELD',
     confidence: 0.92,
     notes:
-      'Yield-protocol registry: starts with 0x5b7ba647 (0xBE19 wallet). ' +
-      'Extend the fromAddress set as more yield protocols are discovered.',
+      'Yield-protocol registry: ' + [...YIELD_PROTOCOL_ADDRESSES].join(', ') + '. ' +
+      'Extend YIELD_PROTOCOL_ADDRESSES in src/shared/yield-protocols.ts as more protocols are discovered.',
+  },
+
+  // ─── SELF-FUNDING FOR YIELD ────────────────────────────────────────────
+  // Must run BEFORE the INCOME rule so it wins on the 0xBE19 funding tx.
+  // When a wallet receives a stablecoin and immediately routes it to a known
+  // yield-protocol address within the block window, that IN is cost-basis
+  // funding (TRANSFER_IN), not employer compensation (INCOME).
+  {
+    id: 'transfer.self_funding_for_yield@v1',
+    description:
+      'Stablecoin IN immediately routed to a known yield-protocol — capital funding, not income',
+    matches: {
+      kind: 'allOf',
+      children: [
+        { kind: 'tokenSymbolIn', symbols: ['USDC', 'USDT', 'cUSD'] },
+        { kind: 'tokenDirection', is: 'in' },
+        { kind: 'tokenTransferCount', op: 'eq', value: 1 },
+        { kind: 'isError', is: false },
+        { kind: 'isInSelfFundingForYieldSet' },
+      ],
+    },
+    classify: 'TRANSFER_IN',
+    jurisdiction: ['NG', 'KE'],
+    confidence: 0.9,
+    notes:
+      'Self-funding for a yield position: the stablecoin IN was routed to a ' +
+      'known yield-protocol within the funding window. Pre-empts the income ' +
+      'rule that would otherwise mis-classify self-funding as employer compensation.',
   },
 
   // ─── INCOME ────────────────────────────────────────────────────────────

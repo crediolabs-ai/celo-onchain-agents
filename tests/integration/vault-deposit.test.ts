@@ -24,7 +24,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { FetchedTxData, RawTx } from '../../src/shared/types.js';
+import type { FetchedTxData, RawTx, TokenTransfer, TxHash } from '../../src/shared/types.js';
 import { classifyWithDeps } from '../../src/sub-agents/tx-classifier/index.js';
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
@@ -131,5 +131,76 @@ describe('ERC-4626 vault deposit — investor tx', () => {
     // No rule matches (no transfers, wrong address), protocol-decoder returns null
     // (address gate rejects), LLM is disabled (no llm deps) → UNKNOWN
     expect(out.classified[0]!.type).toBe('UNKNOWN');
+  });
+});
+
+// ─── Self-funding for yield (0xBE19 2024-05-13 fixture) ────────────────────
+
+const YIELD_POOL = '0x5b7ba6471681c61b4994dc5072b0d0c0ffad4a2b';
+
+describe('self-funding for yield — 0xBE19 2024-05-13', () => {
+  it('USDC IN immediately routed to yield pool → classified TRANSFER_IN (not INCOME)', async () => {
+    // 0xBE19 wallet receives 5,000 USDC from an external address, then
+    // immediately (same block) sends it to the Karmen Mezz Pool.
+    // Expected: the IN tx is classified TRANSFER_IN, not INCOME.
+    const txFund = makeRawTx({
+      hash: ('0x' + '11'.repeat(32)) as TxHash,
+      blockNumber: 29_000_000,
+      timestamp: 1_715_600_000, // ~2024-05-13
+      from: ('0x' + '22'.repeat(20)) as `0x${string}`,
+      to: INVESTOR,
+      value: '0',
+    });
+    const txOut = makeRawTx({
+      hash: ('0x' + '33'.repeat(32)) as TxHash,
+      blockNumber: 29_000_000, // same block
+      from: INVESTOR,
+      to: YIELD_POOL,
+      value: '0',
+    });
+    const tFund = {
+      hash: txFund.hash,
+      blockNumber: txFund.blockNumber,
+      timestamp: txFund.timestamp,
+      from: txFund.from as `0x${string}`,
+      to: INVESTOR as `0x${string}`,
+      contractAddress: `0x${'a0'.repeat(20)}` as `0x${string}`,
+      tokenSymbol: 'USDC',
+      tokenDecimals: 6,
+      value: '5000000000', // 5,000 USDC
+    } as TokenTransfer;
+    const tOut = {
+      hash: txOut.hash,
+      blockNumber: txOut.blockNumber,
+      timestamp: txOut.timestamp,
+      from: INVESTOR as `0x${string}`,
+      to: YIELD_POOL as `0x${string}`,
+      contractAddress: `0x${'a0'.repeat(20)}` as `0x${string}`,
+      tokenSymbol: 'USDC',
+      tokenDecimals: 6,
+      value: '5000000000',
+    } as TokenTransfer;
+
+    const fetched: FetchedTxData = {
+      address: INVESTOR,
+      dateRange: { from: 0, to: 0 },
+      rawTxns: [txFund, txOut],
+      tokenTransfers: [tFund, tOut],
+      internalTxns: [],
+      source: 'celoscan',
+      fetchedAt: 0,
+      paginationComplete: true,
+      fetchErrors: [],
+      contractMetadata: new Map(),
+    };
+
+    const out = await classifyWithDeps({ fetched, jurisdiction: 'KE' });
+
+    const classifiedIn = out.classified.find((c) => c.hash === txFund.hash);
+    expect(classifiedIn).toBeDefined();
+    // The key assertion: this must NOT be INCOME
+    expect(classifiedIn!.type).toBe('TRANSFER_IN');
+    expect(classifiedIn!.confidence).toBe(0.9);
+    expect(classifiedIn!.classifierSource).toBe('rule');
   });
 });

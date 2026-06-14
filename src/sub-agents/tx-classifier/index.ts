@@ -65,6 +65,7 @@ import { llmClassifyTx, type LlmFallbackDeps } from './llm-fallback.js';
 import type { PredicateContext } from './predicates.js';
 import { decodeProtocolAction, isERC4626Vault, SELECTOR_MAP } from './protocol-decoder.js';
 import { ProtocolName, protocolActionToTxType } from './protocol-actions.js';
+import { YIELD_PROTOCOL_ADDRESSES, SELF_FUNDING_BLOCK_WINDOW } from '../../shared/yield-protocols.js';
 
 // ─── Public surface ────────────────────────────────────────────────────────
 
@@ -134,6 +135,62 @@ export async function classify(
 }
 
 /**
+ * Build the set of tx hashes that represent stablecoin self-funding for a
+ * yield position.
+ *
+ * Algorithm: walk through transactions sorted by block number. When we see
+ * a tx TO a yield-protocol address that has a stablecoin OUT, walk backwards
+ * up to `blockWindow` blocks to find the most recent stablecoin IN to the
+ * wallet. If found, that IN hash is the funding source — add it to the set.
+ */
+function computeSelfFundingForYieldSet(
+  rawTxns: readonly RawTx[],
+  transfersByHash: ReadonlyMap<TxHash, readonly TokenTransfer[]>,
+  address: Address,
+  yieldAddrs: ReadonlySet<string>,
+  blockWindow: number,
+): Set<TxHash> {
+  const sorted = [...rawTxns].sort((a, b) => a.blockNumber - b.blockNumber);
+  const funding = new Set<TxHash>();
+  const myAddr = address.toLowerCase();
+
+  for (let i = 0; i < sorted.length; i++) {
+    const tx = sorted[i]!;
+    const transfers = transfersByHash.get(tx.hash) ?? [];
+
+    // Check both tx.to AND token-transfer to addresses against yieldAddrs.
+    // Some yield protocols use a router as tx.to but the actual pool address
+    // appears only in the token transfer's `to` field (e.g. Karmen via 0x4dcc7a router).
+    const txToYield = tx.to ? yieldAddrs.has(tx.to.toLowerCase()) : false;
+    const transferToYield = transfers.some((t) => yieldAddrs.has(t.to.toLowerCase()));
+    if (!txToYield && !transferToYield) continue;
+
+    // There must be a stablecoin OUT from the wallet to qualify as a yield deposit.
+    const stableOut = transfers.some(
+      (t) =>
+        t.from.toLowerCase() === myAddr &&
+        (t.tokenSymbol === 'USDC' || t.tokenSymbol === 'USDT' || t.tokenSymbol === 'cUSD'),
+    );
+    if (!stableOut) continue;
+
+    // Walk backwards and mark ALL stable INs within the block window.
+    // This handles cases where funding arrives in multiple transfers (e.g. 4,999 + 1 USDC).
+    for (let j = i - 1; j >= 0; j--) {
+      const prev = sorted[j]!;
+      if (tx.blockNumber - prev.blockNumber > blockWindow) break;
+      const prevT = transfersByHash.get(prev.hash) ?? [];
+      const stableIn = prevT.some(
+        (t) =>
+          t.to.toLowerCase() === myAddr &&
+          (t.tokenSymbol === 'USDC' || t.tokenSymbol === 'USDT' || t.tokenSymbol === 'cUSD'),
+      );
+      if (stableIn) funding.add(prev.hash);
+    }
+  }
+  return funding;
+}
+
+/**
  * Main entrypoint. Iterates fetched txs, runs the rule engine, falls back to
  * the LLM when needed, and assembles the audit trail.
  */
@@ -160,6 +217,19 @@ export async function classifyWithDeps(
   const transfersByHash = groupBy(fetched.tokenTransfers, (t) => t.hash);
   const internalByHash = groupBy(fetched.internalTxns, (t) => t.hash);
 
+  // ── Self-funding for yield pre-pass ────────────────────────────────────
+  // Build the set of hashes that represent stablecoin INs which were
+  // immediately routed to a known yield-protocol address within the block
+  // window. Threaded into PredicateContext so the rule engine can re-classify
+  // those INs as TRANSFER_IN instead of INCOME.
+  const selfFundingForYieldSet = computeSelfFundingForYieldSet(
+    fetched.rawTxns,
+    transfersByHash,
+    fetched.address,
+    YIELD_PROTOCOL_ADDRESSES,
+    SELF_FUNDING_BLOCK_WINDOW,
+  );
+
   // Per-address protocol hints from the fetcher's contract-metadata map.
   // Empty Map when the fetcher was run with `fetchContractMetadata: false`
   // (or in test fixtures that predate the metadata pass).
@@ -185,6 +255,7 @@ export async function classifyWithDeps(
       address: fetched.address,
       knownContracts,
       ...(jurisdiction !== undefined && { jurisdiction }),
+      ...(selfFundingForYieldSet.size > 0 && { selfFundingForYieldSet }),
     };
 
     // 1. Try the rule table.
