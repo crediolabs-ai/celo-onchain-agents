@@ -26,7 +26,7 @@
  */
 
 import type { AssetLeg, ClassifiedTx, PnlOutput } from '../../../shared/types.js';
-import type { Disposal } from '../../pnl-calculator/engine.js';
+import { classifyVaultAction, type Disposal } from '../../pnl-calculator/engine.js';
 
 /** Stablecoin symbols on Celo (per contract data). */
 const STABLECOIN_SYMBOLS = new Set([
@@ -52,17 +52,33 @@ function assetLabel(leg: AssetLeg | undefined, txHash: string): string {
   return `Token@${hex}`;
 }
 
-/** Map our TxType → CARF tx_type taxonomy. Visible for unit testing. */
+/** Map our TxType → CARF tx_type taxonomy. Visible for unit testing.
+ *
+ * Fix 2026-06-14: YIELD with vaultAddress+no assetOut (vault DEPOSIT) is
+ * 'deposit' (not 'payment') so tax authorities can distinguish a
+ * principal-funded vault position from yield income. YIELD with
+ * vaultAddress+assetOut (vault WITHDRAW) is 'transfer' (shares leaving the
+ * wallet).
+ */
 export function carfTxType(tx: ClassifiedTx): string {
   switch (tx.type) {
     case 'SWAP':
       return 'exchange';
+    // Fix 2026-06-14 (Quan): TRANSFER_IN stays 'transfer' (CARF treats any
+    // movement of crypto-assets as a reportable transfer, regardless of
+    // direction). TRANSFER_OUT is unchanged.
     case 'TRANSFER_IN':
     case 'TRANSFER_OUT':
     case 'BRIDGE':
       return 'transfer';
+    case 'YIELD': {
+      // Vault events: discriminate DEPOSIT vs WITHDRAW by share position.
+      const vaultAction = classifyVaultAction(tx);
+      if (vaultAction === 'DEPOSIT') return 'deposit';
+      if (vaultAction === 'WITHDRAW') return 'transfer';
+      return 'payment';
+    }
     case 'INCOME':
-    case 'YIELD':
     case 'MINT':
       return 'payment';
     case 'GAS':
@@ -86,10 +102,11 @@ export interface OecdCarfRow {
   reporting_period: string;   // "YYYY" tax year
   tx_date: string;             // ISO 8601 date (UTC)
   asset_type: string;          // stablecoin | other_crypto
-  tx_type: string;             // exchange | transfer | payment | fee | burn | other
-  gross_proceeds_usd: number;  // USD proceeds (0 for income/payment)
+  tx_type: string;             // exchange | transfer | payment | fee | burn | deposit | other
+  gross_proceeds_usd: number;  // USD proceeds (0 for income/payment/deposit)
   cost_basis_usd: number;      // USD cost basis (0 for income)
   pnl_usd: number;             // proceeds - cost basis
+  interest_earned_usd: number; // vault WITHDRAW gain (interest), 0 for non-vault
   user_jurisdiction: string;   // "OTHER" (no tax calc in this schema)
   notes: string;               // classifier notes
 }
@@ -124,27 +141,25 @@ export function buildOecdCarfRows(
     const assetIn = tx.assetIn;
     const assetOut = tx.assetOut;
 
-    const asset = assetLabel(assetIn, tx.hash) || assetLabel(assetOut, tx.hash) || 'UNKNOWN';
-    const txType = carfTxType(tx);
+    // Fix 2026-06-14 (Quan): multi-leg txs emit one row per asset leg.
+    const legs: Array<'in' | 'out'> = [];
+    if (assetIn) legs.push('in');
+    if (assetOut) legs.push('out');
+    if (legs.length === 0) legs.push('in');
 
-    // CARF proceeds/cost-basis: only meaningful for "exchange" (SWAP) events.
-    // For "payment" (INCOME/YIELD/MINT), both are 0 — no disposal occurred.
-    // For "transfer", "fee", "burn", "other", all three values are 0.
-    //
-    // B4 fix: proceeds = value of incoming token (assetIn), cost basis = FIFO cost
-    // from EngineResult.disposals[]. Previously the two were swapped.
-    let grossProceedsUsd = 0;
-    let costBasisUsd = 0;
-
-    if (txType === 'exchange') {
-      const disposal = disposalMap.get(tx.hash);
+    // Compute disposal figures once per tx (shared across both legs).
+    const disposal = disposalMap.get(tx.hash);
+    const isExchOrXfer = legs.some((l) => legTypeLabel(tx, l) === 'exchange' || legTypeLabel(tx, l) === 'transfer');
+    let grossProceedsUsd = 0, costBasisUsd = 0, interestEarnedUsd = 0;
+    if (isExchOrXfer) {
       if (disposal) {
-        // Use the PNL engine's per-disposal CGT figures (in micro-USD → USD).
         grossProceedsUsd = Number(disposal.proceedsMicroUsd) / 1_000_000;
         costBasisUsd = Number(disposal.costBasisMicroUsd) / 1_000_000;
+        if (disposal.category === 'INTEREST_EARNED') {
+          interestEarnedUsd = Number(disposal.gainMicroUsd) / 1_000_000;
+        }
       } else {
         // Fallback: proceeds = assetIn value, cost basis = assetOut value.
-        // This is the correct directional formula even without a disposal record.
         const inAmount = parseFloat(assetIn?.amount ?? '0');
         const outAmount = parseFloat(assetOut?.amount ?? '0');
         grossProceedsUsd = inAmount * (assetIn?.priceUsd ?? 0);
@@ -152,22 +167,69 @@ export function buildOecdCarfRows(
       }
     }
 
-    const pnlUsd = Math.round((grossProceedsUsd - costBasisUsd) * 100) / 100;
+    for (const leg of legs) {
+      const legAsset = leg === 'in' ? assetIn : assetOut;
+      const legLabel = legTypeLabel(tx, leg);
 
-    rows.push({
-      reporting_period: String(taxYear),
-      tx_date: date.toISOString().split('T')[0]!,
-      asset_type: carfAssetType(asset),
-      tx_type: txType,
-      gross_proceeds_usd: grossProceedsUsd,
-      cost_basis_usd: costBasisUsd,
-      pnl_usd: pnlUsd,
-      user_jurisdiction: 'OTHER',
-      notes: tx.notes ?? '',
-    });
+      const asset = assetLabel(legAsset, tx.hash) ?? 'UNKNOWN';
+      const txType = legLabel;
+
+      // pnl_usd: capital-gain only on the OUT leg (excludes interest).
+      const legPnl = leg === 'out'
+        ? Math.round((grossProceedsUsd - costBasisUsd) * 100) / 100
+        : 0;
+      // interest_earned_usd only on the IN leg of a vault WITHDRAW.
+      const legInterest = leg === 'in' ? interestEarnedUsd : 0;
+
+      rows.push({
+        reporting_period: String(taxYear),
+        tx_date: date.toISOString().split('T')[0]!,
+        asset_type: carfAssetType(asset),
+        tx_type: txType,
+        gross_proceeds_usd: leg === 'out' ? grossProceedsUsd : 0,
+        cost_basis_usd: leg === 'out' ? costBasisUsd : 0,
+        pnl_usd: legPnl,
+        interest_earned_usd: legInterest,
+        user_jurisdiction: 'OTHER',
+        notes: tx.notes ?? '',
+      });
+    }
   }
 
   return rows;
+}
+
+/**
+ * Per-leg type label for OECD CARF. Symmetric to KE/NG's legTypeLabel.
+ *
+ * Quan 2026-06-14: a multi-leg tx (e.g. USDC OUT paired with a token
+ * mint IN) was previously rendered as a single CARF row keyed on the
+ * inbound asset. The outbound leg (the spent USDC) was invisible. We
+ * now emit one row per leg, with each leg getting the right CARF
+ * tx_type.
+ */
+function legTypeLabel(tx: ClassifiedTx, leg: 'in' | 'out'): string {
+  if (leg === 'in') {
+    if (tx.type === 'SWAP') return 'exchange';
+    if (tx.type === 'TRANSFER_IN' || tx.type === 'TRANSFER_OUT' || tx.type === 'BRIDGE') return 'transfer';
+    const va = classifyVaultAction(tx);
+    if (va === 'DEPOSIT') return 'deposit';
+    if (va === 'WITHDRAW') return 'transfer';
+    if (tx.type === 'INCOME' || tx.type === 'MINT') return 'payment';
+    if (tx.type === 'YIELD') return 'payment';
+    if (tx.type === 'GAS') return 'fee';
+    if (tx.type === 'BURN') return 'burn';
+    return 'other';
+  }
+  // Outbound leg.
+  if (tx.type === 'SWAP') return 'exchange';
+  if (tx.type === 'TRANSFER_IN' || tx.type === 'TRANSFER_OUT' || tx.type === 'BRIDGE') return 'transfer';
+  const va2 = classifyVaultAction(tx);
+  if (va2 === 'DEPOSIT') return 'transfer';
+  if (va2 === 'WITHDRAW') return 'transfer';
+  if (tx.type === 'GAS') return 'fee';
+  if (tx.type === 'BURN') return 'burn';
+  return 'other';
 }
 
 /**
@@ -182,6 +244,7 @@ export function renderOecdCarfCsv(rows: OecdCarfRow[]): string {
     'gross_proceeds_usd',
     'cost_basis_usd',
     'pnl_usd',
+    'interest_earned_usd',
     'user_jurisdiction',
     'notes',
   ];
@@ -195,6 +258,7 @@ export function renderOecdCarfCsv(rows: OecdCarfRow[]): string {
       r.gross_proceeds_usd.toFixed(2),
       r.cost_basis_usd.toFixed(2),
       r.pnl_usd.toFixed(2),
+      r.interest_earned_usd.toFixed(2),
       r.user_jurisdiction,
       `"${r.notes.replace(/"/g, '""')}"`,
     ].join(','),

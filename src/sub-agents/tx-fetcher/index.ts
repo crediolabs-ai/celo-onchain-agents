@@ -116,33 +116,95 @@ export async function fetchTxs(
   // backoff (1.2s/retry × up to 3 retries = 3.6s wasted per page).
   // Sequential execution costs more wall-clock time but eliminates rate-limit
   // hits entirely. Fix #8 (2026-06-13).
-  let normalRows: Awaited<ReturnType<typeof paginateNormalTxs>> = [];
-  let tokenRows: Awaited<ReturnType<typeof paginateTokenTxs>> = [];
-  let internalRows: Awaited<ReturnType<typeof paginateInternalTxs>> = [];
+  //
+  // Each paginateX call now returns a `PaginateResult<T>` with a
+  // `paginationComplete` flag. We aggregate these into a single
+  // paginationComplete for the FetchedTxData — false if ANY endpoint
+  // hit the cap. Fix 2026-06-14 (Quan feedback: silent data loss was
+  // masking the 10k-tx cap for heavy wallets).
+  let normalResult: Awaited<ReturnType<typeof paginateNormalTxs>> = { rows: [], paginationComplete: true, pagesFetched: 0 };
+  let tokenResult: Awaited<ReturnType<typeof paginateTokenTxs>> = { rows: [], paginationComplete: true, pagesFetched: 0 };
+  let internalResult: Awaited<ReturnType<typeof paginateInternalTxs>> = { rows: [], paginationComplete: true, pagesFetched: 0 };
 
   try {
-    normalRows = await paginateNormalTxs({ client, endpoint: 'txlist', address: request.address, startblock, endblock, sort: 'asc' });
+    normalResult = await paginateNormalTxs({ client, endpoint: 'txlist', address: request.address, startblock, endblock, sort: 'asc' });
   } catch (err) {
     collectErr(fetchErrors, 'normal', err);
   }
 
   try {
-    tokenRows = await paginateTokenTxs({ client, endpoint: 'tokentx', address: request.address, startblock, endblock, sort: 'asc' });
+    tokenResult = await paginateTokenTxs({ client, endpoint: 'tokentx', address: request.address, startblock, endblock, sort: 'asc' });
   } catch (err) {
     collectErr(fetchErrors, 'token', err);
   }
 
   try {
-    internalRows = await paginateInternalTxs({ client, endpoint: 'txlistinternal', address: request.address, startblock, endblock, sort: 'asc' });
+    internalResult = await paginateInternalTxs({ client, endpoint: 'txlistinternal', address: request.address, startblock, endblock, sort: 'asc' });
   } catch (err) {
     collectErr(fetchErrors, 'internal', err);
   }
+
+  const normalRows = normalResult.rows;
+  const tokenRows = tokenResult.rows;
+  const internalRows = internalResult.rows;
 
   const rawTxns = normalRows.map(toRawTx);
   const tokenTransfers = tokenRows.map(toTokenTransfer);
   const internalTxns = internalRows.map(toInternalTx);
 
-  const paginationComplete = fetchErrors.length === 0;
+  // ─── Etherscan V2 quirk: orphan token transfers ─────────────────────
+  // Etherscan V2's `txlist` and `txlistinternal` endpoints sometimes omit
+  // txs that the `tokentx` endpoint returns — typically zero-native-value
+  // ERC-20 transfers where the V2 backend has indexed only the token
+  // movement. Example (Quan 2026-06-14): wallet 0xBE19 had a 5,374.90 USDC
+  // IN on 2024-12-14 (hash 0x9aa27723…) returned by `tokentx` but absent
+  // from `txlist`/`txlistinternal`. Without this fallback, the token
+  // transfer would never reach the classifier and the realized 374.90 USDC
+  // yield was invisible to the tax report.
+  //
+  // For each token transfer whose hash isn't in rawTxns or internalTxns,
+  // synthesize a RawTx stub so the existing rule-based classifier picks
+  // it up via the tx-hash → token-transfer join (the rule engine sees
+  // the synthetic raw tx + the associated transfer and emits a
+  // TRANSFER_IN/TRANSFER_OUT classified event).
+  const rawHashes = new Set<string>([...rawTxns.map((t) => t.hash.toLowerCase()), ...internalTxns.map((t) => t.hash.toLowerCase())]);
+  const orphanTokenTransfers = tokenTransfers.filter(
+    (t) => !rawHashes.has(t.hash.toLowerCase()),
+  );
+  for (const t of orphanTokenTransfers) {
+    rawTxns.push({
+      hash: t.hash,
+      blockNumber: t.blockNumber,
+      timestamp: t.timestamp,
+      from: t.from,
+      // The "to" of the synthesized raw tx is the contract being interacted
+      // with (the ERC-20 token). The rule engine joins this hash back to
+      // the token transfer to populate assetIn/assetOut.
+      to: t.contractAddress,
+      value: '0',
+      gasUsed: '0',
+      gasPrice: '0',
+      input: '0x',
+      // Sentinel — lets the audit trail show "this came from a token-
+      // transfer-only fix-up, not a normal txlist result" without
+      // confusing the rule path (which doesn't read methodName).
+      methodName: '(synthesized from token transfer)',
+      isError: '0',
+    });
+  }
+  if (orphanTokenTransfers.length > 0) {
+    // Surface for the agent's diagnostic summary — silent otherwise.
+    console.warn(
+      `[tx-fetcher] synthesized ${orphanTokenTransfers.length} raw-tx stub(s) for orphan token transfer(s); ` +
+        `this is an Etherscan V2 quirk, not a fetcher bug.`,
+    );
+  }
+
+  const paginationComplete =
+    fetchErrors.length === 0 &&
+    normalResult.paginationComplete &&
+    tokenResult.paginationComplete &&
+    internalResult.paginationComplete;
 
   // Gather unique non-null `to` addresses from the raw tx list + the contract
   // addresses from token transfers. These are the addresses the classifier's

@@ -59,10 +59,27 @@ export type Predicate =
   | { kind: 'toIs'; ref: string }
   | { kind: 'fromIs'; ref: string }
   | { kind: 'toIn'; refs: string[] }
+  /**
+   * Literal-address match — case-insensitive EQUALS the `from` field of
+   * the raw tx. Use this for one-off yield-protocol attributions
+   * (`fromAddress: '0x5b7ba647...'` for the BE19 0xBE19 yield path)
+   * without registering a full alias in the contract registry.
+   */
+  | { kind: 'fromAddress'; address: string }
   // Token transfer patterns
   | { kind: 'tokenSymbolIs'; symbol: string }
   | { kind: 'tokenSymbolIn'; symbols: string[] }
   | { kind: 'tokenTransferCount'; op: 'eq' | 'gt' | 'lt'; value: number }
+  /**
+   * Token transfer direction — counts the net direction of any transfers
+   * in the same hash. `'in'` if any transfer is to the wallet, `'out'`
+   * if any transfer is from the wallet, `'mixed'` if both directions
+   * appear. Use this to attribute a stablecoin IN to income/yield even
+   * when the raw tx's native value is 0 (orphan-token-transfer case
+   * where the ERC-20 transfer is logged without a corresponding raw
+   * tx from Celoscan's txlist endpoint).
+   */
+  | { kind: 'tokenDirection'; is: 'in' | 'out' | 'mixed' | 'none' }
   // Native CELO movement
   | { kind: 'nativeDirection'; is: 'in' | 'out' | 'self' | 'none' }
   | { kind: 'valueGt'; amount: string }
@@ -115,6 +132,11 @@ export function evaluatePredicate(p: Predicate, ctx: PredicateContext): boolean 
     case 'fromIs':
       return matchAlias(ctx.tx.from, [p.ref], ctx.knownContracts);
 
+    case 'fromAddress':
+      // Case-insensitive equality. Use this for one-off yield-protocol
+      // attributions without polluting the global alias registry.
+      return ctx.tx.from.toLowerCase() === p.address.toLowerCase();
+
     case 'toIn':
       return matchAlias(ctx.tx.to, p.refs, ctx.knownContracts);
 
@@ -132,6 +154,9 @@ export function evaluatePredicate(p: Predicate, ctx: PredicateContext): boolean 
         case 'lt': return n < p.value;
       }
     }
+
+    case 'tokenDirection':
+      return classifyTokenDirection(ctx) === p.is;
 
     case 'nativeDirection':
       return classifyNativeDirection(ctx) === p.is;
@@ -193,6 +218,33 @@ function classifyNativeDirection(
   if (fromMe && toMe) return 'self';
   if (toMe) return 'in';
   if (fromMe) return 'out';
+  return 'none';
+}
+
+/**
+ * Token transfer direction — looks at the actual transfer list (NOT the
+ * raw tx's native value). 'in' = the wallet received a token; 'out' =
+ * the wallet sent a token; 'mixed' = both happened in the same tx
+ * (e.g. a swap); 'none' = no transfers matched.
+ *
+ * This is the orphan-token-transfer case-fixer: when Etherscan V2
+ * returns a token IN from a hash that's missing from txlist, the
+ * synthesized raw tx has value=0, so `nativeDirection` would be 'none'.
+ * `tokenDirection` correctly reads the transfer list and reports 'in'.
+ */
+function classifyTokenDirection(
+  ctx: PredicateContext,
+): 'in' | 'out' | 'mixed' | 'none' {
+  const me = ctx.address.toLowerCase();
+  let hasIn = false;
+  let hasOut = false;
+  for (const t of ctx.transfers) {
+    if (t.to.toLowerCase() === me) hasIn = true;
+    if (t.from.toLowerCase() === me) hasOut = true;
+  }
+  if (hasIn && hasOut) return 'mixed';
+  if (hasIn) return 'in';
+  if (hasOut) return 'out';
   return 'none';
 }
 

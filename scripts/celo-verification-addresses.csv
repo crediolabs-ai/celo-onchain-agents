@@ -1,0 +1,58 @@
+address,type,profile,source,first_seen,best_for_testing,notes
+0xBE19FF9839f6eEe1255F7461443aE7d987D8077c,user,Untangled USDyc vault investor,Wave 3 verification (handoff #22),2024-05-13,KE 2024 yield=5374.90,8 txs; 1 vault deposit 5374.9 USDyc; verified end-to-end
+0x9b3319a7f1f6a7bc48af14c9b81ba4b41c7c1394,user,DeFi user USDT activity,Phase A verification,2024-12-21,NG 2024 yield=0.02,66 native + 732 token transfers; 1 GoodDollar claim 2026; verified end-to-end
+0x46788b60daf46448668c7abaeea4ac8745451c25,operator,ERC-8004 deployer,Wave 2 demo wallet,2024-04-19,CARF/OTHER 2024 PNL=0,194 txs; mostly contract creation + proxy upgrades; verified end-to-end
+0xac8249fd3d5c83e58ae7b0b2bfededb5cfb0bc96,user,Cross-wallet active counterparty,discovered via txlist 0xBE19,2024-03-25,Test cross-wallet activity,Active sender to 0xBE19 + 0x4678; appears as recipient for many wallets
+0x23810d0e7022d785ba679057e4fbebfed99617c7,user,Counterparty to 0xBE19,discovered via txlist 0xBE19,2024-04-19,Test recipient wallet,Received 8300 CELO micro from 0xBE19
+0x3abd47fc6b317081ccaedfffcb9e136c6ffc1c25,user,Counterparty to 0xBE19,discovered via txlist 0xBE19,2024-08-15,Test recipient wallet,Received funds from 0xBE19 (later in year)
+0x4dcc7a839ce7e952cd90d03d65c70b9ccd6ba4c2,user,Cross-wallet counterparty,discovered via txlist 0xBE19,2024-04-19,Test cross-wallet activity,Recipient of multiple txs from 0xBE19 + 0x4678
+0x8d933c50852f0739199dcc193fc5ad8ac54c3296,user,Counterparty to 0xBE19,discovered via txlist 0xBE19,2024-04-19,Test recipient wallet,Received funds from 0xBE19
+0x1388c158dedb699b79ce0a80206a00f4a6e8d94f,user,Counterparty to 0x9b33,discovered via txlist 0x9b33,2024-06-04,Test recipient wallet,Part of USDT activity cluster
+0xa0e9096b8e5ad2701f51ca1cb11684aaad91993a,user,Counterparty to 0x9b33,discovered via txlist 0x9b33,2024-08-01,Test recipient wallet,Part of USDT activity cluster
+0xbcbea04c29382c47f6dc4e9c6041cbfb62cb2150,user,Counterparty to 0x9b33,discovered via txlist 0x9b33,2024-06-24,Test recipient wallet,Part of USDT activity cluster
+0x04d5b47d7a59443d7240f505e74e44037a0636fc,user,Counterparty to 0x4678,discovered via txlist 0x4678,2024-04-19,Test recipient wallet,Operator-related recipient
+0x5e3193bb51620809d80305541738f78e17516b33,user,Counterparty to 0x4678,discovered via txlist 0x4678,2024-04-19,Test recipient wallet,Operator-related recipient
+0xf2742cba7de47029213aed8db080290b3634b62c,user,Counterparty to 0x4678,discovered via txlist 0x4678,2024-04-19,Test recipient wallet,Operator-related recipient
+0x5147c3476e675fbdbfef8e2576a5bde20b438b0b,user,Counterparty to 0x4678,discovered via txlist 0x4678,2024-01-01,Skip (malformed lookup),41 hex chars; txlist returned no data
+0x87514a7f5114568980ae12b170124f8db34ef31a,user,Counterparty to 0x9b33 (page 2),discovered via txlist 0x9b33 page 2,2024-06-18,Test recipient wallet,Part of broader DeFi activity
+0xf60e176445d4af4f620724db58bfb252ad9d12a1,user,Counterparty to 0x9b33 (page 2),discovered via txlist 0x9b33 page 2,2024-04-11,Test recipient wallet,Part of USDT activity cluster
+0xbad4711d689329e315be3e7c1c64cf652868c56c,user,Counterparty to 0x9b33 (page 4),discovered via txlist 0x9b33 page 4,2025-10-27,Test recipient wallet,Recent activity (2025+); different pattern from 0x9b33 core
+0xbedaccbd65230ea441e7955c0f5344acfc2a45e5,user,Counterparty to 0x9b33 (page 4),discovered via txlist 0x9b33 page 4,2026-03-17,Test recipient wallet,Most recent activity; 2026 user
+0x245eb1c385798a07c8b6df8ee22b7be6e1e97313,user,Counterparty to 0xac82,discovered via txlist 0xac82,2023-10-19,Test recipient wallet,Long-time Celo user (2+ years)
+0x2edfb424e740ae3edc786cda1c59cf9a7d1bfc4e,user,Counterparty to 0xac82,discovered via txlist 0xac82,2024-04-27,Test recipient wallet,Active in 2024 DeFi activity
+0x37f750b7cc259a2f741af45294f6a16572cf5cad,user,Counterparty to 0xac82,discovered via txlist 0xac82,2022-06-17,Test recipient wallet,Long-time Celo user (4+ years)
+0x4f9d8dc409c3a494138cbb8376a4863246766edd,user,Counterparty to 0xac82,discovered via txlist 0xac82,2024-04-27,Test recipient wallet,Active 2024 DeFi user
+0x643770e279d5d0733f21d6dc03a8efbabf3255b4,user,Counterparty to 0xac82,discovered via txlist 0xac82,2023-09-14,Test recipient wallet,Long-time user; also token transfer counterparty
+0x75ff5b4696f27ee84e540154d14ced6ed1dada90,user,Counterparty to 0xac82,discovered via txlist 0xac82,2024-04-27,Test recipient wallet,Active 2024 DeFi user
+0xb3a55e992f79d0d641d294948dac4d48825af07c,user,Counterparty to 0xac82,discovered via txlist 0xac82,2024-05-06,Test recipient wallet,Active 2024 DeFi user
+0xd1f03fc2ff817497f82d7374e51c7d6e64f9435c,user,Counterparty to 0xac82,discovered via txlist 0xac82,2024-05-06,Test recipient wallet,Active 2024 DeFi user
+0xe2c4e451ab542f95252b6034910ab427489b0266,user,Counterparty to 0xac82,discovered via txlist 0xac82,2024-04-25,Test recipient wallet,Active 2024 DeFi user
+0x3468d23a0b1ab3ab9a537813166a8f7ff1947014,user,Counterparty to 0xac82 (token),discovered via tokentx 0xac82,2024-07-11,Test token-transfer recipient,Token transfer activity (not native CELO)
+0x29124e3bb0ebf3d967937e097a3480e28694a6b6,user,Counterparty to 0xac82 (token),discovered via tokentx 0xac82,2025-07-28,Test token-transfer recipient,Recent token activity
+0x2d70cbabf4d8e61d5317b62cbe912935fd94e0fe,user,Counterparty to 0xac82 (token),discovered via tokentx 0xac82,2024-02-26,Test token-transfer recipient,Early 2024 token activity
+0x6cde5f5a192fbf3fd84df983aa6dc30dbd9f8fac,user,Counterparty to 0xac82 (token),discovered via tokentx 0xac82,2024-03-29,Test token-transfer recipient,Early 2024 token activity
+0xa1777e082fa1746eb78dd9c1fbb515419cf6e538,user,Counterparty to 0xac82 (token),discovered via tokentx 0xac82,2024-03-05,Test token-transfer recipient,Early 2024 token activity
+0xcD437749E43A154C07F3553504c68fBfD56B8778,contract,Moola cUSD cToken,src/sub-agents/tx-classifier/protocol-decoder.ts:42,2020+,Test Moola lending classification,MOOLA_CTOKEN_CUSD
+0x6F673c23C7023f5E8C1f1aD1dA5C2F88e2C1b5F8,contract,Moola cEUR cToken,src/sub-agents/tx-classifier/protocol-decoder.ts:43,2020+,Test Moola lending classification,MOOLA_CTOKEN_CEUR
+0x43d72ff17701b2da814620735c39c620ce0ea4a1,contract,GoodDollar UBI Claimer,src/sub-agents/tx-classifier/protocol-decoder.ts:53,2020+,Test GoodDollar G$ claim,GOODDOLLAR_CLAIMERS
+0x2a68c98bd43aa24331396f29166aef2bfd51343f,contract,Untangled USDyc Vault,src/shared/contracts.ts:167,2024-12-31,Test ERC-4626 vault interactions,ERC-4626 vault wrapping bridged USDC
+0xcebA9300f2b948710d2653dd7B07f33A8B32118C,contract,USDC bridged (underlying),src/shared/contracts.ts,2024-12-31,Test stablecoin,USDC.e bridged token on Celo
+0x765DE816845861e75A25fCA122bb6898B8B1282a,contract,cUSD token,src/shared/contracts.ts,2020+,Test cUSD,Mento / Celo native stablecoin
+0xD8763CBa276a3738E6DE85b4b3bF5FDed6D6cA73,contract,cEUR token,src/shared/contracts.ts,2020+,Test cEUR,Celo Euro stablecoin
+0xE3D8bd6Aed4F159bc8000a9cD47CffDb95F96121,contract,Ubeswap V2 Router,src/shared/contracts.ts,2020+,Test DEX swaps,Ubeswap V2 router
+0x777A8255cA72412f0d706dc03C9D1987306B4CaD,contract,Mento Broker,src/shared/contracts.ts,2020+,Test Mento swaps,Mento v1 broker
+0x4861840C2EfB2b98312B0aE34d86fD73E8f9B6f6,contract,Mento Router v2,src/shared/contracts.ts,2020+,Test Mento v2 deposit,Mento v2 router (deposit/withdraw)
+0x94A3240f484A04F5e3d524f528d02694c109463b,contract,GoodDollar Reserve,src/shared/contracts.ts,2020+,Test GoodDollar G$ flows,GoodDollar UBI reserve
+0x471EcE3750Da237f93B8E339c536989b8978a438,contract,CELO native token,src/shared/contracts.ts,2020+,Test CELO transfers,Native CELO ERC-20 wrapper
+0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e,contract,USDT token,src/shared/contracts.ts,2020+,Test USDT,Tether on Celo
+0xe8537a3d056DA446677B9E9d6c5dB704EaAb4787,contract,cREAL token,src/shared/contracts.ts,2020+,Test cREAL,Celo Brazilian Real stablecoin
+0x796Dff6D74F3E27060B71255Fe517BFb23C93eed,contract,Celo native bridge (deprecated),src/shared/contracts.ts,legacy,Skip (deprecated post-L2),Legacy CELO bridge
+0xbDf779B50DafCaC0B90Bb4e954EB5BfE881B0E48,user,Celo ecosystem counterparty,prior reports extraction,2024-01-01,Test recipient wallet,Activity profile unknown
+0x34757893070b0fc5de37aaf2844255ff90f7f1e0,user,Celo ecosystem counterparty,prior reports extraction,2024-01-01,Test recipient wallet,Activity profile unknown
+0x95d4c2b3db32f65f1c26554b002a4dfa23aa5597,user,Celo ecosystem counterparty,prior reports extraction,2024-01-01,Test recipient wallet,Activity profile unknown
+0x79a29b725d13294ea015fc64b2229e87efb3e50e,user,Celo ecosystem counterparty,prior reports extraction,2024-01-01,Test recipient wallet,Activity profile unknown
+0x20b4c892024c23959fb3305c22f683d1e8a54367,user,Celo ecosystem counterparty,prior reports extraction,2024-01-01,Test recipient wallet,Activity profile unknown
+0x21ef97b2d0d7c5fe872d141d48e5c2bc352ab028,user,Celo ecosystem counterparty,prior reports extraction,2024-01-01,Test recipient wallet,Activity profile unknown
+0x288dc841a52fca2707c6947b3a777c5e56cd87bc,user,Celo ecosystem counterparty,prior reports extraction,2024-01-01,Test recipient wallet,Activity profile unknown
+0x9fdaC033CEf6cA326712Ed79D79A056BEe8F4dc7,user,Celo ecosystem counterparty,prior reports extraction,2024-01-01,Test recipient wallet,Activity profile unknown
+0x9380FA34fD9E4fD14C06305FD7B6199089ed4eb9,user,Celo ecosystem counterparty,prior reports extraction,2024-01-01,Test recipient wallet,Activity profile unknown

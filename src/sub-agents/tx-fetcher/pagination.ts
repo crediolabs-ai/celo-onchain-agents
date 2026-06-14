@@ -10,6 +10,13 @@
  *
  * Returns all rows concatenated in arrival order. Throws on per-page errors
  * so the caller can surface them via the FetchedTxData.fetchErrors surface.
+ *
+ * Hit-cap detection: Celoscan enforces `page × offset ≤ 10_000`. With the
+ * default `maxPageSize=100`, that means we can fetch at most 100 pages
+ * (10,000 rows). For wallets with more than 10,000 txs (e.g. exchanges,
+ * heavy user wallets), the loop exits via `page > maxPages` and
+ * `paginationComplete: false` is returned. Without this flag the caller
+ * can't distinguish "we got everything" from "we hit the cap".
  */
 
 import type { Address } from '../../shared/types.js';
@@ -32,24 +39,32 @@ export interface PaginateArgs {
   maxPages?: number;
 }
 
+/** Result shape returned by the paginate* wrappers. */
+export interface PaginateResult<T> {
+  rows: T[];
+  /** False when the loop exited because `page > maxPages` instead of
+   *  receiving a short last page. Set to false means the caller should
+   *  flag the data as incomplete (some txs may be missing). */
+  paginationComplete: boolean;
+  /** How many pages were fetched. Useful for diagnostics. */
+  pagesFetched: number;
+}
+
 const DEFAULT_MAX_PAGES = 100;
 
 /** Paginate the normal-transactions endpoint. */
-export async function paginateNormalTxs(args: PaginateArgs): Promise<CeloscanNormalTx[]> {
-  const rows = await paginateRows(args);
-  return rows as CeloscanNormalTx[];
+export async function paginateNormalTxs(args: PaginateArgs): Promise<PaginateResult<CeloscanNormalTx>> {
+  return paginateRows(args) as Promise<PaginateResult<CeloscanNormalTx>>;
 }
 
 /** Paginate the token-transfers endpoint. */
-export async function paginateTokenTxs(args: PaginateArgs): Promise<CeloscanTokenTx[]> {
-  const rows = await paginateRows(args);
-  return rows as CeloscanTokenTx[];
+export async function paginateTokenTxs(args: PaginateArgs): Promise<PaginateResult<CeloscanTokenTx>> {
+  return paginateRows(args) as Promise<PaginateResult<CeloscanTokenTx>>;
 }
 
 /** Paginate the internal-transactions endpoint. */
-export async function paginateInternalTxs(args: PaginateArgs): Promise<CeloscanInternalTx[]> {
-  const rows = await paginateRows(args);
-  return rows as CeloscanInternalTx[];
+export async function paginateInternalTxs(args: PaginateArgs): Promise<PaginateResult<CeloscanInternalTx>> {
+  return paginateRows(args) as Promise<PaginateResult<CeloscanInternalTx>>;
 }
 
 /**
@@ -69,9 +84,11 @@ export async function paginateInternalTxs(args: PaginateArgs): Promise<CeloscanI
  */
 async function paginateRows(
   args: PaginateArgs,
-): Promise<unknown[]> {
+): Promise<PaginateResult<unknown>> {
   const { client, endpoint, address, startblock, endblock, sort, maxPages = DEFAULT_MAX_PAGES } = args;
   const all: unknown[] = [];
+  let paginationComplete = true;
+  let pagesFetched = 0;
   for (let page = 1; page <= maxPages; page++) {
     let rows: unknown[] = [];
     let rateLimitRetries = 0;
@@ -98,13 +115,28 @@ async function paginateRows(
         throw err;
       }
     }
+    pagesFetched = page;
     if (rows.length === 0) break;
     all.push(...rows);
     // Last page is signalled by a short result. Threshold = the client's
-    // configured `maxPageSize` (Celoscan default 10_000).
+    // configured `maxPageSize` (Celoscan default 100, hard-capped at
+    // 10_000 rows total by the `page × offset ≤ 10_000` rule).
     if (rows.length < client.maxPageSize) break;
+    // We received a full page. If the next iteration would exceed
+    // `maxPages`, mark paginationComplete=false and stop. Otherwise
+    // continue (next page will be fetched in the for-loop continuation).
+    if (page === maxPages) {
+      paginationComplete = false;
+      // Surface a diagnostic so the caller can see this in the CLI
+      // summary. Silent data loss was the previous behavior.
+      console.warn(
+        `[tx-fetcher] pagination cap hit on ${endpoint} for ${address}: ` +
+        `fetched ${page * client.maxPageSize} rows; more may exist.`,
+      );
+      break;
+    }
   }
-  return all;
+  return { rows: all, paginationComplete, pagesFetched };
 }
 
 /** Sleep for `ms` milliseconds. Resolves immediately on 0/negative. */

@@ -19,6 +19,38 @@ import type { Rule } from './predicates.js';
 import { evaluateRule } from './predicates.js';
 
 export const RULES: readonly Rule[] = [
+  // ─── YIELD FROM KNOWN PROTOCOL ─────────────────────────────────────────
+  // Must run BEFORE the INCOME rule below so it wins. Quan 2026-06-14:
+  // 0xBE19 wallet INs 5,374.90 USDC from 0x5b7ba647 (a yield protocol
+  // the user deposited 5,000 USDC into on 2024-05-13). Without this
+  // rule, the IN falls into the generic income bucket, mixing
+  // principal-return with yield-income. With it, the engine routes
+  // the gain (proceeds - cost basis) to interestEarned, separate
+  // from regular income.
+  //
+  // v1 only handles one protocol. As we learn more yield-protocol
+  // addresses from user testing, expand this rule's `matches.children`
+  // to a disjunction of fromAddress checks (or migrate the set into
+  // a proper alias once we have ≥3 entries).
+  {
+    id: 'yield.known_protocol_in@v1',
+    description: 'IN from a known yield-protocol address — yield return (Quan fix 2026-06-14)',
+    matches: {
+      kind: 'allOf',
+      children: [
+        { kind: 'fromAddress', address: '0x5b7ba6471681c61b4994dc5072b0d0c0ffad4a2b' },
+        { kind: 'tokenDirection', is: 'in' },
+        { kind: 'tokenTransferCount', op: 'eq', value: 1 },
+        { kind: 'isError', is: false },
+      ],
+    },
+    classify: 'YIELD',
+    confidence: 0.92,
+    notes:
+      'Yield-protocol registry: starts with 0x5b7ba647 (0xBE19 wallet). ' +
+      'Extend the fromAddress set as more yield protocols are discovered.',
+  },
+
   // ─── INCOME ────────────────────────────────────────────────────────────
   {
     id: 'income.stablecoin_in_no_native_out@v1',
@@ -27,7 +59,19 @@ export const RULES: readonly Rule[] = [
       kind: 'allOf',
       children: [
         { kind: 'tokenSymbolIn', symbols: ['USDC', 'cUSD', 'USDT'] },
-        { kind: 'nativeDirection', is: 'in' },
+        // Fix 2026-06-14 (Quan): use tokenDirection instead of
+        // nativeDirection. Orphan token transfers (Quan yield
+        // case 0xBE19 2024-12-14, 5,374.90 USDC IN from yield
+        // protocol) have a synthesized raw tx with value=0, so
+        // nativeDirection='none'. tokenDirection inspects the
+        // actual transfer list and reports 'in' for "wallet
+        // received a token".
+        //
+        // Restrict to exactly-1-transfer txs so Mento swaps (which
+        // have a USDC OUT + cUSD IN) are not classified as
+        // INCOME. The orphan yield-return has exactly 1 transfer.
+        { kind: 'tokenDirection', is: 'in' },
+        { kind: 'tokenTransferCount', op: 'eq', value: 1 },
         { kind: 'isError', is: false },
       ],
     },

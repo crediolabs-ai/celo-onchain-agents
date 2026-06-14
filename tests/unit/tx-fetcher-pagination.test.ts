@@ -44,7 +44,7 @@ function paginatingFetcher(endpoint: string, pageSizes: number[]): CeloscanFetch
 }
 
 describe('paginateNormalTxs', () => {
-  it('stops after a single short page (< maxPageSize)', async () => {
+  it('stops after a single short page (< maxPageSize) and reports paginationComplete=true', async () => {
     // The paginator treats a page shorter than the configured maxPageSize
     // as "last page" and breaks. A 50-row response with maxPageSize=100
     // triggers exactly one fetch.
@@ -58,8 +58,10 @@ describe('paginateNormalTxs', () => {
     const client = createCeloscanClient({
       apiUrl: 'https://api-alfajores.celoscan.io/api', fetcher, maxPageSize: 100,
     });
-    const rows = await paginateNormalTxs({ client, endpoint: 'txlist', address: ADDR });
-    expect(rows).toHaveLength(50);
+    const r = await paginateNormalTxs({ client, endpoint: 'txlist', address: ADDR });
+    expect(r.rows).toHaveLength(50);
+    expect(r.paginationComplete).toBe(true);
+    expect(r.pagesFetched).toBe(1);
     expect(calls).toBe(1);
   });
 
@@ -68,26 +70,35 @@ describe('paginateNormalTxs', () => {
     const client = createCeloscanClient({
       apiUrl: 'https://api-alfajores.celoscan.io/api', fetcher, maxPageSize: 100,
     });
-    const rows = await paginateNormalTxs({ client, endpoint: 'txlist', address: ADDR });
-    expect(rows).toHaveLength(247);
+    const r = await paginateNormalTxs({ client, endpoint: 'txlist', address: ADDR });
+    expect(r.rows).toHaveLength(247);
+    expect(r.paginationComplete).toBe(true);
+    expect(r.pagesFetched).toBe(3);
   });
 
   it('stops immediately on an empty first page', async () => {
     const fetcher = paginatingFetcher('txlist', [0]);
-    const client = createCeloscanClient({ apiUrl: 'https://api-alfajores.celoscan.io/api', fetcher });
-    const rows = await paginateNormalTxs({ client, endpoint: 'txlist', address: ADDR });
-    expect(rows).toHaveLength(0);
+    const client = createCeloscanClient({
+      apiUrl: 'https://api-alfajores.celoscan.io/api', fetcher, maxPageSize: 100,
+    });
+    const r = await paginateNormalTxs({ client, endpoint: 'txlist', address: ADDR });
+    expect(r.rows).toHaveLength(0);
+    expect(r.paginationComplete).toBe(true);
   });
 
-  it('respects the maxPages hard cap (no runaway loop)', async () => {
+  it('respects the maxPages hard cap and reports paginationComplete=false (Quan fix 2026-06-14)', async () => {
     // maxPageSize=100 matches the per-call response size, so the loop never
-    // thinks a page is "short" — only maxPages stops it.
+    // thinks a page is "short" — only maxPages stops it. With maxPages=3
+    // and 11 pages of data available, the loop must stop at page 3 and
+    // surface paginationComplete=false so the caller knows data is missing.
     const fetcher = paginatingFetcher('txlist', [100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100]);
     const client = createCeloscanClient({
       apiUrl: 'https://api-alfajores.celoscan.io/api', fetcher, maxPageSize: 100,
     });
-    const rows = await paginateNormalTxs({ client, endpoint: 'txlist', address: ADDR, maxPages: 3 });
-    expect(rows).toHaveLength(300); // 3 full pages
+    const r = await paginateNormalTxs({ client, endpoint: 'txlist', address: ADDR, maxPages: 3 });
+    expect(r.rows).toHaveLength(300); // 3 full pages
+    expect(r.paginationComplete).toBe(false);
+    expect(r.pagesFetched).toBe(3);
   });
 });
 
@@ -97,8 +108,9 @@ describe('paginateTokenTxs / paginateInternalTxs', () => {
     const client = createCeloscanClient({
       apiUrl: 'https://api-alfajores.celoscan.io/api', fetcher, maxPageSize: 100,
     });
-    const rows = await paginateTokenTxs({ client, endpoint: 'tokentx', address: ADDR });
-    expect(rows).toHaveLength(112);
+    const r = await paginateTokenTxs({ client, endpoint: 'tokentx', address: ADDR });
+    expect(r.rows).toHaveLength(112);
+    expect(r.paginationComplete).toBe(true);
   });
 
   it('paginateInternalTxs follows multiple pages', async () => {
@@ -106,7 +118,8 @@ describe('paginateTokenTxs / paginateInternalTxs', () => {
     const client = createCeloscanClient({
       apiUrl: 'https://api-alfajores.celoscan.io/api', fetcher, maxPageSize: 100,
     });
-    const rows = await paginateInternalTxs({ client, endpoint: 'txlistinternal', address: ADDR });
-    expect(rows).toHaveLength(205);
+    const r = await paginateInternalTxs({ client, endpoint: 'txlistinternal', address: ADDR });
+    expect(r.rows).toHaveLength(205);
+    expect(r.paginationComplete).toBe(true);
   });
 });
