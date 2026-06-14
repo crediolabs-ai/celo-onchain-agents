@@ -23,3 +23,7 @@ node_modules/
 # Coverage
 coverage/
 .nyc_output/
+
+# Self registration temp files (QR + status blob, not project source)
+tmp-self-*
+tmp-*.png
