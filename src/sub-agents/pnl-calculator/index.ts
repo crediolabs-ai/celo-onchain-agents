@@ -18,6 +18,7 @@
 import {
   type PnlInput,
   type PnlOutput,
+  type ClassifiedTx,
   type CostBasisMethod,
   type Jurisdiction,
   type TaxYearSummary,
@@ -72,8 +73,9 @@ export async function computePnl(
       break;
   }
 
-  // Year-bucket the totals.
-  const taxYears = bucketByYear(engine, input.taxYear);
+  // Year-bucket the totals (passing classified for yield round-trip
+  // auto-attribute — Quan 2026-06-14 second pass).
+  const taxYears = bucketByYear(engine, input.taxYear, input.classified);
 
   // Convert micro-USD bigint totals → USD number for the contract shape.
   // (CSV exporter and orchestrator consume decimal numbers; we lose sub-cent
@@ -132,10 +134,24 @@ function computeUnrealized(
  *  and never withdrew, the report showed `Yield: $5,374.90, Taxable income:
  *  $0.00` — internally inconsistent. The yield/interest now feed into the
  *  taxable line so the report is consistent.
+ *
+ *  Fix 2026-06-14 (Quan, second pass): yield round-trip auto-attribute.
+ *  A YIELD-IN classified by the `yield.known_protocol_in@v1` rule (e.g.
+ *  0xBE19's 5,374.90 USDC IN from 0x5b7ba647) was previously reported as
+ *  GROSS yield in the Yield line. But the user's earlier OUT of 5,000
+ *  USDC to the yield protocol is the cost basis — the net yield (gain) is
+ *  only 374.90 USDC. To match sếp Quân's expectation that the report
+ *  surfaces the net gain ("income should be $374, not $5,371"), we
+ *  subtract the gross IN from the Yield bucket and route the net gain
+ *  to Interest earned. The "matching OUT" is identified by same-symbol,
+ *  same-year, and earlier-timestamp heuristic. (Future work: tighten the
+ *  match by also comparing the OUT's recipient address to a known
+ *  yield-protocol registry — currently the matching is loose.)
  */
 function bucketByYear(
   engine: EngineResult,
   taxYear: number,
+  classified: readonly ClassifiedTx[] = [],
 ): TaxYearSummary[] {
   const totalsByYear: Record<number, TaxYearSummary> = {};
 
@@ -179,6 +195,17 @@ function bucketByYear(
     const summary = ensure(year);
     summary.yield += Number(microUsd) / 1_000_000;
   }
+
+  // ─── Yield round-trip auto-attribute (Quan 2026-06-14 second pass) ──
+  // Subtract the gross YIELD-IN from the Yield bucket; route the net
+  // gain (gross IN − matching prior OUT) to Interest earned.
+  const adjustments = computeYieldRoundTripAdjustments(classified);
+  for (const [year, reduction] of adjustments.yieldReductionByYear) {
+    const summary = ensure(year);
+    summary.yield -= reduction;
+    summary.interestEarned += adjustments.interestEarnedByYear.get(year) ?? 0;
+  }
+
   const requested = ensure(taxYear);
   // Gas is engine-wide (still a placeholder — see TODO in fifo.ts:160).
   requested.deductibleGas = Number(engine.gasMicroUsdTotal) / 1_000_000;
@@ -192,6 +219,91 @@ function bucketByYear(
   }
 
   return Object.values(totalsByYear).sort((a, b) => a.year - b.year);
+}
+
+/**
+ * Default token decimals for common Celo tokens. Mirror of
+ * `engine.ts:DEFAULT_DECIMALS` — kept here to avoid a cross-module
+ * import for one inline helper.
+ */
+const ROUND_TRIP_DEFAULT_DECIMALS: Record<string, number> = {
+  USDC: 6,
+  USDT: 6,
+  USDyc: 6,
+  cUSD: 18,
+  cEUR: 18,
+  cREAL: 18,
+  G$: 18,
+  CELO: 18,
+};
+
+/** Compute the USD value of an asset leg using the engine's decimals. */
+function legUsd(leg: { symbol: string; amount: string; priceUsd: number }): number {
+  const decimals = ROUND_TRIP_DEFAULT_DECIMALS[leg.symbol] ?? 18;
+  return (Number(leg.amount) * leg.priceUsd) / Math.pow(10, decimals);
+}
+
+/**
+ * Find yield-protocol round-trips and produce per-year adjustments
+ * that net the gross IN out of the Yield bucket and route the net
+ * gain to Interest earned.
+ *
+ * Match heuristic (loose — see Quan 2026-06-14 follow-up):
+ *  - The YIELD-IN must be classified by the `yield.known_protocol_in@v1`
+ *    rule (notes contain "yield.known_protocol_in").
+ *  - The matching OUT is the EARLIEST earlier classified event in the
+ *    same year with the same asset symbol whose `assetOut` is set.
+ *  - The net gain is `IN.value − OUT.value` (USD). If `IN.value <
+ *    OUT.value`, the round-trip was a loss; we still attribute to
+ *    Interest earned (negative).
+ *  - The gross IN is subtracted from the Yield bucket.
+ *
+ * Future work: tighten the match by also requiring the OUT's recipient
+ * to be in a yield-protocol registry. For now, the heuristic works for
+ * the documented 0xBE19 case (5,000 USDC OUT May 13, 5,374.90 USDC IN
+ * Dec 14, same symbol + same year).
+ */
+export function computeYieldRoundTripAdjustments(
+  classified: readonly ClassifiedTx[],
+): { yieldReductionByYear: Map<number, number>; interestEarnedByYear: Map<number, number> } {
+  const yieldReductionByYear = new Map<number, number>();
+  const interestEarnedByYear = new Map<number, number>();
+
+  for (const c of classified) {
+    // Only consider non-vault YIELD-IN classified by the yield.known_protocol_in rule.
+    if (c.type !== 'YIELD') continue;
+    if (c.vaultAddress !== undefined) continue;
+    if (!c.notes?.includes('yield.known_protocol_in')) continue;
+    if (!c.assetIn) continue;
+
+    const txYear = new Date(c.timestamp * 1000).getUTCFullYear();
+    const symbol = c.assetIn.symbol;
+    const inUsd = legUsd(c.assetIn);
+
+    // Find the EARLIEST earlier OUT with the same symbol in the same year.
+    // Only match one OUT per YIELD-IN (the deposit), not all prior OUTs —
+    // summing would incorrectly include unrelated USDC transfers (e.g. a
+    // subsequent vault DEPOSIT after the yield IN).
+    let outUsd = 0;
+    let earliestTs = Infinity;
+    for (const prev of classified) {
+      if (prev.timestamp >= c.timestamp) continue;
+      if (new Date(prev.timestamp * 1000).getUTCFullYear() !== txYear) continue;
+      if (!prev.assetOut || prev.assetOut.symbol !== symbol) continue;
+      if (prev.timestamp < earliestTs) {
+        earliestTs = prev.timestamp;
+        outUsd = legUsd(prev.assetOut);
+      }
+    }
+
+    if (outUsd > 0) {
+      const gain = inUsd - outUsd;
+      yieldReductionByYear.set(txYear, (yieldReductionByYear.get(txYear) ?? 0) + inUsd);
+      interestEarnedByYear.set(txYear, (interestEarnedByYear.get(txYear) ?? 0) + gain);
+    }
+  }
+
+  return { yieldReductionByYear, interestEarnedByYear };
 }
 
 /** Compat entry: which (method, jurisdiction) combos are legal. */

@@ -19,6 +19,7 @@ import { computeLifo } from '../../src/sub-agents/pnl-calculator/lifo.js';
 import { computeWac } from '../../src/sub-agents/pnl-calculator/wac.js';
 import {
   computePnl,
+  computeYieldRoundTripAdjustments,
   methodJurisdictionCompat,
 } from '../../src/sub-agents/pnl-calculator/index.js';
 import { mkHash } from '../fixtures/mk-hash.js';
@@ -817,5 +818,124 @@ describe('computePnl', () => {
     expect(d.costBasisMicroUsd).toBe(500_000n);
     expect(d.proceedsMicroUsd).toBe(800_000n);
     expect(d.gainMicroUsd).toBe(300_000n);
+  });
+});
+
+// ─── Yield round-trip auto-attribute (Quan 2026-06-14) ─────────────────────
+
+describe('computeYieldRoundTripAdjustments', () => {
+  // USDC has 6 decimals: 1 USDC = 1_000_000.
+  // 5,000 USDC = 5_000_000_000; 5,374.90 USDC = 5_374_900_000.
+  const FIVE_K_USDC = '5000000000';
+  const FIVE_K_THREE_SEVEN_FOUR_USDC = '5374900000';
+
+  // Jan 1, May 13, Dec 14, Dec 31 (all 2024).
+  const TS_2024_MAY = 1_715_596_800 as Timestamp; // ~ May 13
+  const TS_2024_DEC_MID = 1_734_148_800 as Timestamp; // ~ Dec 14
+  const TS_2024_DEC_LATE = 1_735_008_000 as Timestamp; // ~ Dec 31
+
+  // Build a YIELD-IN classified by yield.known_protocol_in@v1 (the 0xBE19 case).
+  const knownProtocolIn = (amount: string, timestamp: Timestamp): ClassifiedTx => ({
+    hash: mkHash(),
+    timestamp,
+    type: 'YIELD',
+    assetIn: { symbol: 'USDC', amount, priceUsd: 1.0 },
+    classifierSource: 'rule',
+    notes: 'yield.known_protocol_in@v1: matched 0x5b7ba647',
+  });
+
+  const transferOut = (amount: string, timestamp: Timestamp, opts?: { vaultAddress?: Address }): ClassifiedTx => ({
+    hash: mkHash(),
+    timestamp,
+    type: 'TRANSFER_OUT',
+    assetOut: { symbol: 'USDC', amount, priceUsd: 1.0 },
+    classifierSource: 'rule',
+    ...(opts?.vaultAddress ? { vaultAddress: opts.vaultAddress } : {}),
+  });
+
+  it('matches the EARLIEST USDC OUT, not the sum (0xBE19 case)', () => {
+    // Scenario mirrors 0xBE19 KE 2024:
+    //   May 13: OUT 5,000 USDC → yield protocol deposit
+    //   Dec 14: YIELD-IN 5,374.90 USDC from yield protocol
+    //   Dec 31: OUT 5,374.90 USDC → vault DEPOSIT (should be IGNORED)
+    //
+    // Pre-fix bug: algorithm summed both OUTs (5,000 + 5,374.90 = 10,374.90),
+    // producing a negative "interest" of -5,000 instead of the true +374.90.
+    // Post-fix: only the earliest OUT is matched, interest = 5,374.90 − 5,000.
+    const VAULT = '0xcccccccccccccccccccccccccccccccccccccccccccc' as Address;
+    const out = computeYieldRoundTripAdjustments([
+      transferOut(FIVE_K_USDC, TS_2024_MAY),
+      knownProtocolIn(FIVE_K_THREE_SEVEN_FOUR_USDC, TS_2024_DEC_MID),
+      transferOut(FIVE_K_THREE_SEVEN_FOUR_USDC, TS_2024_DEC_LATE, { vaultAddress: VAULT }),
+    ]);
+
+    expect(out.yieldReductionByYear.get(2024)).toBeCloseTo(5374.90, 4);
+    expect(out.interestEarnedByYear.get(2024)).toBeCloseTo(374.90, 4);
+  });
+
+  it('makes no adjustment when there is no earlier USDC OUT in the same year', () => {
+    // YIELD-IN on Dec 14, no OUTs at all in 2024.
+    const out = computeYieldRoundTripAdjustments([
+      knownProtocolIn(FIVE_K_THREE_SEVEN_FOUR_USDC, TS_2024_DEC_MID),
+    ]);
+    expect(out.yieldReductionByYear.size).toBe(0);
+    expect(out.interestEarnedByYear.size).toBe(0);
+  });
+
+  it('ignores OUTs that come AFTER the YIELD-IN (only earlier ones count)', () => {
+    // Dec 14: YIELD-IN. Dec 31: OUT 5,000 (later — must not be matched).
+    const out = computeYieldRoundTripAdjustments([
+      knownProtocolIn(FIVE_K_THREE_SEVEN_FOUR_USDC, TS_2024_DEC_MID),
+      transferOut(FIVE_K_USDC, TS_2024_DEC_LATE),
+    ]);
+    expect(out.yieldReductionByYear.size).toBe(0);
+    expect(out.interestEarnedByYear.size).toBe(0);
+  });
+
+  it('ignores OUTs with a different asset symbol', () => {
+    // OUT in CELO (not USDC) should not match the USDC YIELD-IN.
+    const celoOut: ClassifiedTx = {
+      hash: mkHash(),
+      timestamp: TS_2024_MAY,
+      type: 'TRANSFER_OUT',
+      assetOut: { symbol: 'CELO', amount: '1000000000000000000', priceUsd: 0.5 },
+      classifierSource: 'rule',
+    };
+    const out = computeYieldRoundTripAdjustments([
+      celoOut,
+      knownProtocolIn(FIVE_K_THREE_SEVEN_FOUR_USDC, TS_2024_DEC_MID),
+    ]);
+    expect(out.yieldReductionByYear.size).toBe(0);
+    expect(out.interestEarnedByYear.size).toBe(0);
+  });
+
+  it('ignores YIELD-IN events that are not classified by yield.known_protocol_in', () => {
+    // Same shape as the matching case, but the YIELD-IN has no notes —
+    // should not be adjusted.
+    const vanillaYield: ClassifiedTx = {
+      hash: mkHash(),
+      timestamp: TS_2024_DEC_MID,
+      type: 'YIELD',
+      assetIn: { symbol: 'USDC', amount: FIVE_K_THREE_SEVEN_FOUR_USDC, priceUsd: 1.0 },
+      classifierSource: 'rule',
+    };
+    const out = computeYieldRoundTripAdjustments([
+      transferOut(FIVE_K_USDC, TS_2024_MAY),
+      vanillaYield,
+    ]);
+    expect(out.yieldReductionByYear.size).toBe(0);
+    expect(out.interestEarnedByYear.size).toBe(0);
+  });
+
+  it('attributes a loss when the matching OUT exceeds the YIELD-IN value', () => {
+    // Defensive: if IN < OUT (e.g. partial yield), gain is negative and
+    // still lands in interestEarned. Yield bucket is still reduced by IN.
+    const BIGGER_OUT = '6000000000'; // 6,000 USDC
+    const out = computeYieldRoundTripAdjustments([
+      transferOut(BIGGER_OUT, TS_2024_MAY),
+      knownProtocolIn(FIVE_K_THREE_SEVEN_FOUR_USDC, TS_2024_DEC_MID),
+    ]);
+    expect(out.yieldReductionByYear.get(2024)).toBeCloseTo(5374.90, 4);
+    expect(out.interestEarnedByYear.get(2024)).toBeCloseTo(-625.10, 4);
   });
 });
