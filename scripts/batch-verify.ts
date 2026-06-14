@@ -102,7 +102,6 @@ for (const row of rows) {
     continue;
   }
   const jurisdiction = jurFor(row.address);
-  const t0 = Date.now();
   let cells: (string | number)[] = [];
   try {
     const r = await runPipeline({
