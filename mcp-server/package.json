@@ -8,8 +8,11 @@
   },
   "scripts": {
     "dev": "tsx src/server.ts",
+    "bridge:dev": "tsx src/http-bridge.ts",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "compile": "tsc",
+    "start": "node dist/server.js",
+    "bridge": "node dist/http-bridge.js"
   },
   "dependencies": {
     "dotenv": "^16.4.7",
