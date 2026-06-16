@@ -7,8 +7,10 @@
  *
  *   POST /mcp   → JSON-RPC over HTTP (MCP transport)
  *   POST /a2a   → JSON-RPC over HTTP (A2A transport; same wire format)
- *   GET  /health → 200 + tool inventory
- *   GET  /      → 200 + tool inventory (alias)
+ *   GET  /health              → 200 + tool inventory
+ *   GET  /                    → 200 + tool inventory (alias)
+ *   GET  /a2a                 → A2A-spec AgentCard JSON (for 8004scan discovery)
+ *   GET  /.well-known/agent.json → A2A-standard discovery path
  *
  * Architecture: long-lived stdio child process. Each HTTP request writes one
  * JSON-RPC line to the child's stdin and reads one response line from stdout.
@@ -17,7 +19,7 @@
  * Configuration via env:
  *   PORT       (default 3000)
  *   HOST       (default 127.0.0.1)
- *   STDIO_BIN  (default: node + path to dist/server.js, then tsx fallback)
+ *   PUBLIC_URL  (default https://api.crediolabs.ai) — used in AgentCard
  */
 import 'dotenv/config';
 import { spawn, ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -31,6 +33,7 @@ const HERE = resolve(__dirname, '..'); // mcp-server/
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const HOST = process.env.HOST ?? '127.0.0.1';
+const PUBLIC_URL = process.env.PUBLIC_URL ?? 'https://api.crediolabs.ai';
 
 // Try compiled dist/server.js first, then fall back to tsx for dev
 const STDIO_CANDIDATES = [
@@ -38,6 +41,56 @@ const STDIO_CANDIDATES = [
   resolve(HERE, 'src/server.ts'),   // tsx fallback
 ];
 const STDIO_TARGET = STDIO_CANDIDATES.find((p) => existsSync(p)) ?? STDIO_CANDIDATES[0];
+
+// ─── A2A AgentCard (served on GET /a2a and /.well-known/agent.json) ──────────
+// Spec: https://a2a-protocol.org/ — 8004scan health-checks for `name` field.
+const AGENT_CARD = {
+  name: 'Credio onchain tax and portfolio agent',
+  description:
+    'L3 onchain tax & portfolio agent for Celo. Reads a Celo wallet, classifies ' +
+    'every transaction by protocol semantics (not just transfer in/out), and ' +
+    'produces jurisdiction-specific tax reports (Nigeria FIRS, Kenya KRA, ' +
+    'OECD CARF) plus natural-language queries.',
+  url: `${PUBLIC_URL}/a2a`,
+  version: '0.1.0',
+  provider: {
+    organization: 'CredioLabs',
+    url: 'https://crediolabs.ai',
+  },
+  capabilities: {
+    streaming: false,
+    pushNotifications: false,
+    stateTransitionHistory: false,
+  },
+  defaultInputModes: ['text/plain', 'application/json'],
+  defaultOutputModes: ['text/plain', 'application/json'],
+  skills: [
+    { id: 'get_celo_portfolio', name: 'get_celo_portfolio',
+      description: 'Read Celo wallet holdings and balances (native + ERC-20s).',
+      tags: ['celo', 'portfolio', 'wallet', 'balance'] },
+    { id: 'get_celo_transaction_history', name: 'get_celo_transaction_history',
+      description: 'Fetch full Celo transaction history from Celoscan with pagination.',
+      tags: ['celo', 'transactions', 'history', 'celoscan'] },
+    { id: 'get_token_price_history', name: 'get_token_price_history',
+      description: 'Historical USD prices for CELO, cUSD, cEUR, cREAL, USDC, USDT.',
+      tags: ['celo', 'prices', 'coingecko', 'historical'] },
+    { id: 'calculate_tax_liability', name: 'calculate_tax_liability',
+      description: 'Compute realized gains, income, yield, tax owed for NG/KE/OTHER.',
+      tags: ['tax', 'fifo', 'lifo', 'wac', 'nigeria', 'kenya'] },
+    { id: 'get_staking_rewards', name: 'get_staking_rewards',
+      description: 'Celo validator/epoch staking rewards via transfer-heuristic.',
+      tags: ['celo', 'staking', 'rewards', 'validators'] },
+    { id: 'generate_tax_report', name: 'generate_tax_report',
+      description: 'Full tax report (NG/KE/OTHER CSV schemas) for a wallet + year.',
+      tags: ['tax', 'report', 'csv', 'nigeria', 'kenya', 'carf'] },
+    { id: 'get_carf_report', name: 'get_carf_report',
+      description: 'OECD CARF (Crypto-Asset Reporting Framework) report for a date range.',
+      tags: ['carf', 'oecd', 'cross-border', 'compliance'] },
+  ],
+  // 8004scan-friendly extensions (EIP-8004 v2.0 + A2A v0.2 overlap)
+  x402Support: true,
+  supportedJurisdictions: ['NG', 'KE', 'OTHER'],
+};
 
 function stdioCommand(): { cmd: string; args: string[] } {
   // Use the same node binary that's running this bridge (process.execPath).
@@ -170,8 +223,15 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
     return;
   }
 
+  // A2A AgentCard — served on GET /a2a and the standard discovery path.
+  // 8004scan pings these to validate A2A endpoints; expects a JSON object with `name`.
+  if (method === 'GET' && (url === '/a2a' || url === '/a2a/' || url === '/.well-known/agent.json')) {
+    send(res, 200, AGENT_CARD);
+    return;
+  }
+
   // Health + tool inventory
-  if (method === 'GET' && (url === '/health' || url === '/' || url === '/mcp' || url === '/a2a')) {
+  if (method === 'GET' && (url === '/health' || url === '/' || url === '/mcp')) {
     try {
       const result = (await callStdio('tools/list')) as { tools: Array<{ name: string; description: string }> };
       send(res, 200, {
